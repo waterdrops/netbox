@@ -1,38 +1,75 @@
 from django import template
-from django.urls import reverse
+from django.contrib.contenttypes.models import ContentType
+from django.urls import NoReverseMatch, reverse
 
-from extras.models import ExportTemplate
-from utilities.utils import prepare_cloned_fields
+from core.models import ObjectType
+from extras.models import Bookmark, ExportTemplate, Subscription
+from netbox.models.features import NotificationsMixin
+from utilities.querydict import prepare_cloned_fields
+from utilities.views import get_viewname
+
+__all__ = (
+    'add_button',
+    'bookmark_button',
+    'bulk_delete_button',
+    'bulk_edit_button',
+    'clone_button',
+    'delete_button',
+    'edit_button',
+    'export_button',
+    'import_button',
+    'subscribe_button',
+    'sync_button',
+)
 
 register = template.Library()
-
-
-def _get_viewname(instance, action):
-    """
-    Return the appropriate viewname for adding, editing, or deleting an instance.
-    """
-
-    # Validate action
-    assert action in ('add', 'edit', 'delete')
-    viewname = "{}:{}_{}".format(
-        instance._meta.app_label, instance._meta.model_name, action
-    )
-
-    return viewname
 
 
 #
 # Instance buttons
 #
 
+@register.inclusion_tag('buttons/bookmark.html', takes_context=True)
+def bookmark_button(context, instance):
+    # Check if this user has already bookmarked the object
+    content_type = ContentType.objects.get_for_model(instance)
+    bookmark = Bookmark.objects.filter(
+        object_type=content_type,
+        object_id=instance.pk,
+        user=context['request'].user
+    ).first()
+
+    # Compile form URL & data
+    if bookmark:
+        form_url = reverse('extras:bookmark_delete', kwargs={'pk': bookmark.pk})
+        form_data = {
+            'confirm': 'true',
+        }
+    else:
+        form_url = reverse('extras:bookmark_add')
+        form_data = {
+            'object_type': content_type.pk,
+            'object_id': instance.pk,
+        }
+
+    return {
+        'bookmark': bookmark,
+        'form_url': form_url,
+        'form_data': form_data,
+        'return_url': instance.get_absolute_url(),
+    }
+
+
 @register.inclusion_tag('buttons/clone.html')
 def clone_button(instance):
-    url = reverse(_get_viewname(instance, 'add'))
+    url = reverse(get_viewname(instance, 'add'))
 
     # Populate cloned field values
-    param_string = prepare_cloned_fields(instance)
+    param_string = prepare_cloned_fields(instance).urlencode()
     if param_string:
         url = f'{url}?{param_string}'
+    else:
+        url = None
 
     return {
         'url': url,
@@ -40,16 +77,9 @@ def clone_button(instance):
 
 
 @register.inclusion_tag('buttons/edit.html')
-def edit_button(instance, use_pk=False):
-    viewname = _get_viewname(instance, 'edit')
-
-    # Assign kwargs
-    if hasattr(instance, 'slug') and not use_pk:
-        kwargs = {'slug': instance.slug}
-    else:
-        kwargs = {'pk': instance.pk}
-
-    url = reverse(viewname, kwargs=kwargs)
+def edit_button(instance):
+    viewname = get_viewname(instance, 'edit')
+    url = reverse(viewname, kwargs={'pk': instance.pk})
 
     return {
         'url': url,
@@ -57,16 +87,54 @@ def edit_button(instance, use_pk=False):
 
 
 @register.inclusion_tag('buttons/delete.html')
-def delete_button(instance, use_pk=False):
-    viewname = _get_viewname(instance, 'delete')
+def delete_button(instance):
+    viewname = get_viewname(instance, 'delete')
+    url = reverse(viewname, kwargs={'pk': instance.pk})
 
-    # Assign kwargs
-    if hasattr(instance, 'slug') and not use_pk:
-        kwargs = {'slug': instance.slug}
+    return {
+        'url': url,
+    }
+
+
+@register.inclusion_tag('buttons/subscribe.html', takes_context=True)
+def subscribe_button(context, instance):
+    # Skip for objects which don't support notifications
+    if not (issubclass(instance.__class__, NotificationsMixin)):
+        return {}
+
+    # Check if this user has already subscribed to the object
+    content_type = ContentType.objects.get_for_model(instance)
+    subscription = Subscription.objects.filter(
+        object_type=content_type,
+        object_id=instance.pk,
+        user=context['request'].user
+    ).first()
+
+    # Compile form URL & data
+    if subscription:
+        form_url = reverse('extras:subscription_delete', kwargs={'pk': subscription.pk})
+        form_data = {
+            'confirm': 'true',
+        }
     else:
-        kwargs = {'pk': instance.pk}
+        form_url = reverse('extras:subscription_add')
+        form_data = {
+            'object_type': content_type.pk,
+            'object_id': instance.pk,
+        }
 
-    url = reverse(viewname, kwargs=kwargs)
+    return {
+        'subscription': subscription,
+        'form_url': form_url,
+        'form_data': form_data,
+        'return_url': instance.get_absolute_url(),
+    }
+
+
+@register.inclusion_tag('buttons/sync.html')
+def sync_button(instance):
+    viewname = get_viewname(instance, 'sync')
+    url = reverse(viewname, kwargs={'pk': instance.pk})
 
     return {
         'url': url,
@@ -78,31 +146,74 @@ def delete_button(instance, use_pk=False):
 #
 
 @register.inclusion_tag('buttons/add.html')
-def add_button(url):
-    url = reverse(url)
+def add_button(model, action='add'):
+    try:
+        url = reverse(get_viewname(model, action))
+    except NoReverseMatch:
+        url = None
 
     return {
-        'add_url': url,
+        'url': url,
     }
 
 
 @register.inclusion_tag('buttons/import.html')
-def import_button(url):
+def import_button(model, action='bulk_import'):
+    try:
+        url = reverse(get_viewname(model, action))
+    except NoReverseMatch:
+        url = None
 
     return {
-        'import_url': url,
+        'url': url,
     }
 
 
 @register.inclusion_tag('buttons/export.html', takes_context=True)
-def export_button(context, content_type=None):
-    if content_type is not None:
-        user = context['request'].user
-        export_templates = ExportTemplate.objects.restrict(user, 'view').filter(content_type=content_type)
-    else:
-        export_templates = []
+def export_button(context, model):
+    object_type = ObjectType.objects.get_for_model(model)
+    user = context['request'].user
+
+    # Determine if the "all data" export returns CSV or YAML
+    data_format = 'YAML' if hasattr(object_type.model_class(), 'to_yaml') else 'CSV'
+
+    # Retrieve all export templates for this model
+    export_templates = ExportTemplate.objects.restrict(user, 'view').filter(object_types=object_type)
 
     return {
-        'url_params': context['request'].GET,
+        'perms': context['perms'],
+        'object_type': object_type,
+        'url_params': context['request'].GET.urlencode() if context['request'].GET else '',
         'export_templates': export_templates,
+        'data_format': data_format,
+    }
+
+
+@register.inclusion_tag('buttons/bulk_edit.html', takes_context=True)
+def bulk_edit_button(context, model, action='bulk_edit', query_params=None):
+    try:
+        url = reverse(get_viewname(model, action))
+        if query_params:
+            url = f'{url}?{query_params.urlencode()}'
+    except NoReverseMatch:
+        url = None
+
+    return {
+        'htmx_navigation': context.get('htmx_navigation'),
+        'url': url,
+    }
+
+
+@register.inclusion_tag('buttons/bulk_delete.html', takes_context=True)
+def bulk_delete_button(context, model, action='bulk_delete', query_params=None):
+    try:
+        url = reverse(get_viewname(model, action))
+        if query_params:
+            url = f'{url}?{query_params.urlencode()}'
+    except NoReverseMatch:
+        url = None
+
+    return {
+        'htmx_navigation': context.get('htmx_navigation'),
+        'url': url,
     }

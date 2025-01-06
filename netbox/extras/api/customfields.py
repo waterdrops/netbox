@@ -1,9 +1,14 @@
-from django.contrib.contenttypes.models import ContentType
-from rest_framework.fields import CreateOnlyDefault, Field
+from django.utils.translation import gettext as _
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import extend_schema_field
+from rest_framework.fields import Field
+from rest_framework.serializers import ValidationError
 
-from extras.choices import *
+from core.models import ObjectType
+from extras.choices import CustomFieldTypeChoices
+from extras.constants import CUSTOMFIELD_EMPTY_VALUES
 from extras.models import CustomField
-from netbox.api import ValidatedModelSerializer
+from utilities.api import get_serializer_for_model
 
 
 #
@@ -20,8 +25,8 @@ class CustomFieldDefaultValues:
         self.model = serializer_field.parent.Meta.model
 
         # Retrieve the CustomFields for the parent model
-        content_type = ContentType.objects.get_for_model(self.model)
-        fields = CustomField.objects.filter(content_types=content_type)
+        object_type = ObjectType.objects.get_for_model(self.model)
+        fields = CustomField.objects.filter(object_types=object_type)
 
         # Populate the default value for each CustomField
         value = {}
@@ -34,6 +39,7 @@ class CustomFieldDefaultValues:
         return value
 
 
+@extend_schema_field(OpenApiTypes.OBJECT)
 class CustomFieldsDataField(Field):
 
     def _get_custom_fields(self):
@@ -41,49 +47,49 @@ class CustomFieldsDataField(Field):
         Cache CustomFields assigned to this model to avoid redundant database queries
         """
         if not hasattr(self, '_custom_fields'):
-            content_type = ContentType.objects.get_for_model(self.parent.Meta.model)
-            self._custom_fields = CustomField.objects.filter(content_types=content_type)
+            object_type = ObjectType.objects.get_for_model(self.parent.Meta.model)
+            self._custom_fields = CustomField.objects.filter(object_types=object_type)
         return self._custom_fields
 
     def to_representation(self, obj):
-        return {
-            cf.name: obj.get(cf.name) for cf in self._get_custom_fields()
-        }
+        # TODO: Fix circular import
+        from utilities.api import get_serializer_for_model
+        data = {}
+        for cf in self._get_custom_fields():
+            value = cf.deserialize(obj.get(cf.name))
+            if value is not None and cf.type == CustomFieldTypeChoices.TYPE_OBJECT:
+                serializer = get_serializer_for_model(cf.related_object_type.model_class())
+                value = serializer(value, nested=True, context=self.parent.context).data
+            elif value is not None and cf.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+                serializer = get_serializer_for_model(cf.related_object_type.model_class())
+                value = serializer(value, nested=True, many=True, context=self.parent.context).data
+            data[cf.name] = value
+
+        return data
 
     def to_internal_value(self, data):
+        if type(data) is not dict:
+            raise ValidationError(
+                "Invalid data format. Custom field data must be passed as a dictionary mapping field names to their "
+                "values."
+            )
+
+        # Serialize object and multi-object values
+        for cf in self._get_custom_fields():
+            if cf.name in data and data[cf.name] not in CUSTOMFIELD_EMPTY_VALUES and cf.type in (
+                    CustomFieldTypeChoices.TYPE_OBJECT,
+                    CustomFieldTypeChoices.TYPE_MULTIOBJECT
+            ):
+                serializer_class = get_serializer_for_model(cf.related_object_type.model_class())
+                many = cf.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT
+                serializer = serializer_class(data=data[cf.name], nested=True, many=many, context=self.parent.context)
+                if serializer.is_valid():
+                    data[cf.name] = [obj['id'] for obj in serializer.data] if many else serializer.data['id']
+                else:
+                    raise ValidationError(_("Unknown related object(s): {name}").format(name=data[cf.name]))
+
         # If updating an existing instance, start with existing custom_field_data
         if self.parent.instance:
             data = {**self.parent.instance.custom_field_data, **data}
 
         return data
-
-
-class CustomFieldModelSerializer(ValidatedModelSerializer):
-    """
-    Extends ModelSerializer to render any CustomFields and their values associated with an object.
-    """
-    custom_fields = CustomFieldsDataField(
-        source='custom_field_data',
-        default=CreateOnlyDefault(CustomFieldDefaultValues())
-    )
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-        if self.instance is not None:
-
-            # Retrieve the set of CustomFields which apply to this type of object
-            content_type = ContentType.objects.get_for_model(self.Meta.model)
-            fields = CustomField.objects.filter(content_types=content_type)
-
-            # Populate CustomFieldValues for each instance from database
-            if type(self.instance) in (list, tuple):
-                for obj in self.instance:
-                    self._populate_custom_fields(obj, fields)
-            else:
-                self._populate_custom_fields(self.instance, fields)
-
-    def _populate_custom_fields(self, instance, custom_fields):
-        instance.custom_fields = {}
-        for field in custom_fields:
-            instance.custom_fields[field.name] = instance.cf.get(field.name)

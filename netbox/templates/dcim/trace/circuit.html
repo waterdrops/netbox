@@ -1,5 +1,6 @@
+{% load i18n %}
 <div class="node">
-    <strong><a href="{{ circuit.get_absolute_url }}">{{ circuit }}</a></strong><br />
-    Circuit<br />
-    <a href="{{ circuit.provider.get_absolute_url }}">{{ circuit.provider }}</a>
+    <strong>{{ circuit|linkify }}</strong><br />
+    {% trans "Circuit" %}<br />
+    {{ circuit.provider|linkify }}
 </div>

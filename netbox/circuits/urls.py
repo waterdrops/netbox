@@ -1,50 +1,75 @@
-from django.urls import path
+from django.urls import include, path
 
-from dcim.views import CableCreateView, PathTraceView
-from extras.views import ObjectChangeLogView
+from utilities.urls import get_model_urls
 from . import views
-from .models import Circuit, CircuitTermination, CircuitType, Provider
 
 app_name = 'circuits'
 urlpatterns = [
+    path('providers/', include(get_model_urls('circuits', 'provider', detail=False))),
+    path('providers/<int:pk>/', include(get_model_urls('circuits', 'provider'))),
 
-    # Providers
-    path('providers/', views.ProviderListView.as_view(), name='provider_list'),
-    path('providers/add/', views.ProviderEditView.as_view(), name='provider_add'),
-    path('providers/import/', views.ProviderBulkImportView.as_view(), name='provider_import'),
-    path('providers/edit/', views.ProviderBulkEditView.as_view(), name='provider_bulk_edit'),
-    path('providers/delete/', views.ProviderBulkDeleteView.as_view(), name='provider_bulk_delete'),
-    path('providers/<slug:slug>/', views.ProviderView.as_view(), name='provider'),
-    path('providers/<slug:slug>/edit/', views.ProviderEditView.as_view(), name='provider_edit'),
-    path('providers/<slug:slug>/delete/', views.ProviderDeleteView.as_view(), name='provider_delete'),
-    path('providers/<slug:slug>/changelog/', ObjectChangeLogView.as_view(), name='provider_changelog', kwargs={'model': Provider}),
+    path('provider-accounts/', include(get_model_urls('circuits', 'provideraccount', detail=False))),
+    path('provider-accounts/<int:pk>/', include(get_model_urls('circuits', 'provideraccount'))),
 
-    # Circuit types
-    path('circuit-types/', views.CircuitTypeListView.as_view(), name='circuittype_list'),
-    path('circuit-types/add/', views.CircuitTypeEditView.as_view(), name='circuittype_add'),
-    path('circuit-types/import/', views.CircuitTypeBulkImportView.as_view(), name='circuittype_import'),
-    path('circuit-types/delete/', views.CircuitTypeBulkDeleteView.as_view(), name='circuittype_bulk_delete'),
-    path('circuit-types/<slug:slug>/edit/', views.CircuitTypeEditView.as_view(), name='circuittype_edit'),
-    path('circuit-types/<slug:slug>/delete/', views.CircuitTypeDeleteView.as_view(), name='circuittype_delete'),
-    path('circuit-types/<slug:slug>/changelog/', ObjectChangeLogView.as_view(), name='circuittype_changelog', kwargs={'model': CircuitType}),
+    path('provider-networks/', include(get_model_urls('circuits', 'providernetwork', detail=False))),
+    path('provider-networks/<int:pk>/', include(get_model_urls('circuits', 'providernetwork'))),
 
-    # Circuits
-    path('circuits/', views.CircuitListView.as_view(), name='circuit_list'),
-    path('circuits/add/', views.CircuitEditView.as_view(), name='circuit_add'),
-    path('circuits/import/', views.CircuitBulkImportView.as_view(), name='circuit_import'),
-    path('circuits/edit/', views.CircuitBulkEditView.as_view(), name='circuit_bulk_edit'),
-    path('circuits/delete/', views.CircuitBulkDeleteView.as_view(), name='circuit_bulk_delete'),
-    path('circuits/<int:pk>/', views.CircuitView.as_view(), name='circuit'),
-    path('circuits/<int:pk>/edit/', views.CircuitEditView.as_view(), name='circuit_edit'),
-    path('circuits/<int:pk>/delete/', views.CircuitDeleteView.as_view(), name='circuit_delete'),
-    path('circuits/<int:pk>/changelog/', ObjectChangeLogView.as_view(), name='circuit_changelog', kwargs={'model': Circuit}),
-    path('circuits/<int:pk>/terminations/swap/', views.CircuitSwapTerminations.as_view(), name='circuit_terminations_swap'),
+    path('circuit-types/', include(get_model_urls('circuits', 'circuittype', detail=False))),
+    path('circuit-types/<int:pk>/', include(get_model_urls('circuits', 'circuittype'))),
 
-    # Circuit terminations
-    path('circuits/<int:circuit>/terminations/add/', views.CircuitTerminationEditView.as_view(), name='circuittermination_add'),
-    path('circuit-terminations/<int:pk>/edit/', views.CircuitTerminationEditView.as_view(), name='circuittermination_edit'),
-    path('circuit-terminations/<int:pk>/delete/', views.CircuitTerminationDeleteView.as_view(), name='circuittermination_delete'),
-    path('circuit-terminations/<int:termination_a_id>/connect/<str:termination_b_type>/', CableCreateView.as_view(), name='circuittermination_connect', kwargs={'termination_a_type': CircuitTermination}),
-    path('circuit-terminations/<int:pk>/trace/', PathTraceView.as_view(), name='circuittermination_trace', kwargs={'model': CircuitTermination}),
+    path('circuits/', include(get_model_urls('circuits', 'circuit', detail=False))),
+    path(
+        'circuits/<int:pk>/terminations/swap/',
+        views.CircuitSwapTerminations.as_view(),
+        name='circuit_terminations_swap'
+    ),
+    path('circuits/<int:pk>/', include(get_model_urls('circuits', 'circuit'))),
 
+    path('circuit-terminations/', include(get_model_urls('circuits', 'circuittermination', detail=False))),
+    path('circuit-terminations/<int:pk>/', include(get_model_urls('circuits', 'circuittermination'))),
+
+    path('circuit-groups/', include(get_model_urls('circuits', 'circuitgroup', detail=False))),
+    path('circuit-groups/<int:pk>/', include(get_model_urls('circuits', 'circuitgroup'))),
+
+    path('circuit-group-assignments/', include(get_model_urls('circuits', 'circuitgroupassignment', detail=False))),
+    path('circuit-group-assignments/<int:pk>/', include(get_model_urls('circuits', 'circuitgroupassignment'))),
+
+    # Virtual circuits
+    path('virtual-circuits/', views.VirtualCircuitListView.as_view(), name='virtualcircuit_list'),
+    path('virtual-circuits/add/', views.VirtualCircuitEditView.as_view(), name='virtualcircuit_add'),
+    path('virtual-circuits/import/', views.VirtualCircuitBulkImportView.as_view(), name='virtualcircuit_bulk_import'),
+    path('virtual-circuits/edit/', views.VirtualCircuitBulkEditView.as_view(), name='virtualcircuit_bulk_edit'),
+    path('virtual-circuits/delete/', views.VirtualCircuitBulkDeleteView.as_view(), name='virtualcircuit_bulk_delete'),
+    path('virtual-circuits/<int:pk>/', include(get_model_urls('circuits', 'virtualcircuit'))),
+
+    path('virtual-circuit-types/', include(get_model_urls('circuits', 'virtualcircuittype', detail=False))),
+    path('virtual-circuit-types/<int:pk>/', include(get_model_urls('circuits', 'virtualcircuittype'))),
+
+    # Virtual circuit terminations
+    path(
+        'virtual-circuit-terminations/',
+        views.VirtualCircuitTerminationListView.as_view(),
+        name='virtualcircuittermination_list',
+    ),
+    path(
+        'virtual-circuit-terminations/add/',
+        views.VirtualCircuitTerminationEditView.as_view(),
+        name='virtualcircuittermination_add',
+    ),
+    path(
+        'virtual-circuit-terminations/import/',
+        views.VirtualCircuitTerminationBulkImportView.as_view(),
+        name='virtualcircuittermination_bulk_import',
+    ),
+    path(
+        'virtual-circuit-terminations/edit/',
+        views.VirtualCircuitTerminationBulkEditView.as_view(),
+        name='virtualcircuittermination_bulk_edit',
+    ),
+    path(
+        'virtual-circuit-terminations/delete/',
+        views.VirtualCircuitTerminationBulkDeleteView.as_view(),
+        name='virtualcircuittermination_bulk_delete',
+    ),
+    path('virtual-circuit-terminations/<int:pk>/', include(get_model_urls('circuits', 'virtualcircuittermination'))),
 ]

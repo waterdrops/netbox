@@ -1,10 +1,6 @@
 from django.db.models import Q
 
-from .choices import IPAddressRoleChoices
-
-# BGP ASN bounds
-BGP_ASN_MIN = 1
-BGP_ASN_MAX = 2**32 - 1
+from .choices import FHRPGroupProtocolChoices, IPAddressRoleChoices
 
 
 #
@@ -34,6 +30,7 @@ PREFIX_LENGTH_MAX = 127  # IPv6
 
 IPADDRESS_ASSIGNMENT_MODELS = Q(
     Q(app_label='dcim', model='interface') |
+    Q(app_label='ipam', model='fhrpgroup') |
     Q(app_label='virtualization', model='vminterface')
 )
 
@@ -52,12 +49,34 @@ IPADDRESS_ROLES_NONUNIQUE = (
 
 
 #
+# FHRP groups
+#
+
+FHRPGROUPASSIGNMENT_PRIORITY_MIN = 0
+FHRPGROUPASSIGNMENT_PRIORITY_MAX = 255
+
+FHRP_PROTOCOL_ROLE_MAPPINGS = {
+    FHRPGroupProtocolChoices.PROTOCOL_VRRP2: IPAddressRoleChoices.ROLE_VRRP,
+    FHRPGroupProtocolChoices.PROTOCOL_VRRP3: IPAddressRoleChoices.ROLE_VRRP,
+    FHRPGroupProtocolChoices.PROTOCOL_HSRP: IPAddressRoleChoices.ROLE_HSRP,
+    FHRPGroupProtocolChoices.PROTOCOL_GLBP: IPAddressRoleChoices.ROLE_GLBP,
+    FHRPGroupProtocolChoices.PROTOCOL_CARP: IPAddressRoleChoices.ROLE_CARP,
+    FHRPGroupProtocolChoices.PROTOCOL_OTHER: IPAddressRoleChoices.ROLE_VIP,
+}
+
+
+#
 # VLANs
 #
 
 # 12-bit VLAN ID (values 0 and 4095 are reserved)
 VLAN_VID_MIN = 1
 VLAN_VID_MAX = 4094
+
+# models values for ContentTypes which may be VLANGroup scope types
+VLANGROUP_SCOPE_TYPES = (
+    'region', 'sitegroup', 'site', 'location', 'rack', 'clustergroup', 'cluster',
+)
 
 
 #

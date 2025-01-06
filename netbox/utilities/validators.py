@@ -1,8 +1,24 @@
 import re
 
-from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.core.validators import _lazy_re_compile, BaseValidator, URLValidator
+from django.core.validators import BaseValidator, RegexValidator, URLValidator, _lazy_re_compile
+from django.utils.translation import gettext_lazy as _
+
+from netbox.config import get_config
+
+__all__ = (
+    'ColorValidator',
+    'EnhancedURLValidator',
+    'ExclusionValidator',
+    'validate_regex',
+)
+
+
+ColorValidator = RegexValidator(
+    regex='^[0-9a-f]{6}$',
+    message='Enter a valid hexadecimal RGB color code.',
+    code='invalid'
+)
 
 
 class EnhancedURLValidator(URLValidator):
@@ -19,7 +35,13 @@ class EnhancedURLValidator(URLValidator):
         r'(?::\d{2,5})?'                    # Port number
         r'(?:[/?#][^\s]*)?'                 # Path
         r'\Z', re.IGNORECASE)
-    schemes = settings.ALLOWED_URL_SCHEMES
+    schemes = None
+
+    def __call__(self, value):
+        if self.schemes is None:
+            # We can't load the allowed schemes until the configuration has been initialized
+            self.schemes = get_config().ALLOWED_URL_SCHEMES
+        return super().__call__(value)
 
 
 class ExclusionValidator(BaseValidator):
@@ -40,4 +62,4 @@ def validate_regex(value):
     try:
         re.compile(value)
     except re.error:
-        raise ValidationError(f"{value} is not a valid regular expression.")
+        raise ValidationError(_("{value} is not a valid regular expression.").format(value=value))

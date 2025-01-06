@@ -3,21 +3,43 @@ import netaddr
 from .constants import *
 from .models import Prefix, VLAN
 
+__all__ = (
+    'add_available_ipaddresses',
+    'add_available_vlans',
+    'add_requested_prefixes',
+    'get_next_available_prefix',
+    'rebuild_prefixes',
+)
 
-def add_available_prefixes(parent, prefix_list):
+
+def add_requested_prefixes(parent, prefix_list, show_available=True, show_assigned=True):
     """
-    Create fake Prefix objects for all unallocated space within a prefix.
+    Return a list of requested prefixes using show_available, show_assigned filters. If available prefixes are
+    requested, create fake Prefix objects for all unallocated space within a prefix.
+
+    :param parent: Parent Prefix instance
+    :param prefix_list: Child prefixes list
+    :param show_available: Include available prefixes.
+    :param show_assigned: Show assigned prefixes.
     """
+    child_prefixes = []
 
-    # Find all unallocated space
-    available_prefixes = netaddr.IPSet(parent) ^ netaddr.IPSet([p.prefix for p in prefix_list])
-    available_prefixes = [Prefix(prefix=p, status=None) for p in available_prefixes.iter_cidrs()]
+    # Add available prefixes to the table if requested
+    if prefix_list and show_available:
 
-    # Concatenate and sort complete list of children
-    prefix_list = list(prefix_list) + available_prefixes
-    prefix_list.sort(key=lambda p: p.prefix)
+        # Find all unallocated space, add fake Prefix objects to child_prefixes.
+        available_prefixes = netaddr.IPSet(parent) ^ netaddr.IPSet([p.prefix for p in prefix_list])
+        available_prefixes = [Prefix(prefix=p, status=None) for p in available_prefixes.iter_cidrs()]
+        child_prefixes = child_prefixes + available_prefixes
 
-    return prefix_list
+    # Add assigned prefixes to the table if requested
+    if prefix_list and show_assigned:
+        child_prefixes = child_prefixes + list(prefix_list)
+
+    # Sort child prefixes after additions
+    child_prefixes.sort(key=lambda p: p.prefix)
+
+    return child_prefixes
 
 
 def add_available_ipaddresses(prefix, ipaddress_list, is_pool=False):
@@ -68,26 +90,131 @@ def add_available_ipaddresses(prefix, ipaddress_list, is_pool=False):
     return output
 
 
-def add_available_vlans(vlan_group, vlans):
+def available_vlans_from_range(vlans, vlan_group, vid_range):
     """
     Create fake records for all gaps between used VLANs
     """
-    if not vlans:
-        return [{'vid': VLAN_VID_MIN, 'available': VLAN_VID_MAX - VLAN_VID_MIN + 1}]
+    min_vid = int(vid_range.lower) if vid_range else VLAN_VID_MIN
+    max_vid = int(vid_range.upper) if vid_range else VLAN_VID_MAX
 
-    prev_vid = VLAN_VID_MAX
+    if not vlans:
+        return [{
+            'vid': min_vid,
+            'vlan_group': vlan_group,
+            'available': max_vid - min_vid
+        }]
+
+    prev_vid = min_vid - 1
     new_vlans = []
     for vlan in vlans:
+
+        # Ignore VIDs outside the range
+        if not min_vid <= vlan.vid < max_vid:
+            continue
+
+        # Annotate any available VIDs between the previous (or minimum) VID
+        # and the current VID
         if vlan.vid - prev_vid > 1:
-            new_vlans.append({'vid': prev_vid + 1, 'available': vlan.vid - prev_vid - 1})
+            new_vlans.append({
+                'vid': prev_vid + 1,
+                'vlan_group': vlan_group,
+                'available': vlan.vid - prev_vid - 1,
+            })
+
         prev_vid = vlan.vid
 
-    if vlans[0].vid > VLAN_VID_MIN:
-        new_vlans.append({'vid': VLAN_VID_MIN, 'available': vlans[0].vid - VLAN_VID_MIN})
-    if prev_vid < VLAN_VID_MAX:
-        new_vlans.append({'vid': prev_vid + 1, 'available': VLAN_VID_MAX - prev_vid})
+    # Annotate any remaining available VLANs
+    if prev_vid < max_vid:
+        new_vlans.append({
+            'vid': prev_vid + 1,
+            'vlan_group': vlan_group,
+            'available': max_vid - prev_vid - 1,
+        })
+
+    return new_vlans
+
+
+def add_available_vlans(vlans, vlan_group):
+    """
+    Create fake records for all gaps between used VLANs
+    """
+    new_vlans = []
+    for vid_range in vlan_group.vid_ranges:
+        new_vlans.extend(available_vlans_from_range(vlans, vlan_group, vid_range))
 
     vlans = list(vlans) + new_vlans
-    vlans.sort(key=lambda v: v.vid if type(v) == VLAN else v['vid'])
+    vlans.sort(key=lambda v: v.vid if type(v) is VLAN else v['vid'])
 
     return vlans
+
+
+def rebuild_prefixes(vrf):
+    """
+    Rebuild the prefix hierarchy for all prefixes in the specified VRF (or global table).
+    """
+    def contains(parent, child):
+        return child in parent and child != parent
+
+    def push_to_stack(prefix):
+        # Increment child count on parent nodes
+        for n in stack:
+            n['children'] += 1
+        stack.append({
+            'pk': [prefix['pk']],
+            'prefix': prefix['prefix'],
+            'children': 0,
+        })
+
+    stack = []
+    update_queue = []
+    prefixes = Prefix.objects.filter(vrf=vrf).values('pk', 'prefix')
+
+    # Iterate through all Prefixes in the VRF, growing and shrinking the stack as we go
+    for i, p in enumerate(prefixes):
+
+        # Grow the stack if this is a child of the most recent prefix
+        if not stack or contains(stack[-1]['prefix'], p['prefix']):
+            push_to_stack(p)
+
+        # Handle duplicate prefixes
+        elif stack[-1]['prefix'] == p['prefix']:
+            stack[-1]['pk'].append(p['pk'])
+
+        # If this is a sibling or parent of the most recent prefix, pop nodes from the
+        # stack until we reach a parent prefix (or the root)
+        else:
+            while stack and not contains(stack[-1]['prefix'], p['prefix']):
+                node = stack.pop()
+                for pk in node['pk']:
+                    update_queue.append(
+                        Prefix(pk=pk, _depth=len(stack), _children=node['children'])
+                    )
+            push_to_stack(p)
+
+        # Flush the update queue once it reaches 100 Prefixes
+        if len(update_queue) >= 100:
+            Prefix.objects.bulk_update(update_queue, ['_depth', '_children'])
+            update_queue = []
+
+    # Clear out any prefixes remaining in the stack
+    while stack:
+        node = stack.pop()
+        for pk in node['pk']:
+            update_queue.append(
+                Prefix(pk=pk, _depth=len(stack), _children=node['children'])
+            )
+
+    # Final flush of any remaining Prefixes
+    Prefix.objects.bulk_update(update_queue, ['_depth', '_children'])
+
+
+def get_next_available_prefix(ipset, prefix_size):
+    """
+    Given a prefix length, allocate the next available prefix from an IPSet.
+    """
+    for available_prefix in ipset.iter_cidrs():
+        if prefix_size >= available_prefix.prefixlen:
+            allocated_prefix = f"{available_prefix.network}/{prefix_size}"
+            ipset.remove(allocated_prefix)
+            return allocated_prefix
+    return None

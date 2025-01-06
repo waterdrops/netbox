@@ -1,14 +1,15 @@
 import hashlib
 import hmac
+import logging
 
-from django.contrib.contenttypes.models import ContentType
-from django.utils import timezone
-from django_rq import get_queue
+import requests
+from django.conf import settings
+from django_rq import job
+from jinja2.exceptions import TemplateError
 
-from utilities.api import get_serializer_for_model
-from .choices import *
-from .models import Webhook
-from .registry import registry
+from .constants import WEBHOOK_EVENT_TYPES
+
+logger = logging.getLogger('netbox.webhooks')
 
 
 def generate_signature(request_body, secret):
@@ -23,44 +24,77 @@ def generate_signature(request_body, secret):
     return hmac_prep.hexdigest()
 
 
-def enqueue_webhooks(instance, user, request_id, action):
+@job('default')
+def send_webhook(event_rule, model_name, event_type, data, timestamp, username, request_id=None, snapshots=None):
     """
-    Find Webhook(s) assigned to this instance + action and enqueue them
-    to be processed
+    Make a POST request to the defined Webhook
     """
-    # Determine whether this type of object supports webhooks
-    app_label = instance._meta.app_label
-    model_name = instance._meta.model_name
-    if model_name not in registry['model_features']['webhooks'].get(app_label, []):
-        return
+    webhook = event_rule.action_object
 
-    # Retrieve any applicable Webhooks
-    content_type = ContentType.objects.get_for_model(instance)
-    action_flag = {
-        ObjectChangeActionChoices.ACTION_CREATE: 'type_create',
-        ObjectChangeActionChoices.ACTION_UPDATE: 'type_update',
-        ObjectChangeActionChoices.ACTION_DELETE: 'type_delete',
-    }[action]
-    webhooks = Webhook.objects.filter(content_types=content_type, enabled=True, **{action_flag: True})
+    # Prepare context data for headers & body templates
+    context = {
+        'event': WEBHOOK_EVENT_TYPES.get(event_type, event_type),
+        'timestamp': timestamp,
+        'model': model_name,
+        'username': username,
+        'request_id': request_id,
+        'data': data,
+    }
+    if snapshots:
+        context.update({
+            'snapshots': snapshots
+        })
 
-    if webhooks.exists():
-        # Get the Model's API serializer class and serialize the object
-        serializer_class = get_serializer_for_model(instance.__class__)
-        serializer_context = {
-            'request': None,
-        }
-        serializer = serializer_class(instance, context=serializer_context)
+    # Build the headers for the HTTP request
+    headers = {
+        'Content-Type': webhook.http_content_type,
+    }
+    try:
+        headers.update(webhook.render_headers(context))
+    except (TemplateError, ValueError) as e:
+        logger.error(f"Error parsing HTTP headers for webhook {webhook}: {e}")
+        raise e
 
-        # Enqueue the webhooks
-        webhook_queue = get_queue('default')
-        for webhook in webhooks:
-            webhook_queue.enqueue(
-                "extras.webhooks_worker.process_webhook",
-                webhook,
-                serializer.data,
-                instance._meta.model_name,
-                action,
-                str(timezone.now()),
-                user.username,
-                request_id
-            )
+    # Render the request body
+    try:
+        body = webhook.render_body(context)
+    except TemplateError as e:
+        logger.error(f"Error rendering request body for webhook {webhook}: {e}")
+        raise e
+
+    # Prepare the HTTP request
+    params = {
+        'method': webhook.http_method,
+        'url': webhook.render_payload_url(context),
+        'headers': headers,
+        'data': body.encode('utf8'),
+    }
+    logger.info(
+        f"Sending {params['method']} request to {params['url']} ({context['model']} {context['event']})"
+    )
+    logger.debug(params)
+    try:
+        prepared_request = requests.Request(**params).prepare()
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error forming HTTP request: {e}")
+        raise e
+
+    # If a secret key is defined, sign the request with a hash of the key and its content
+    if webhook.secret != '':
+        prepared_request.headers['X-Hook-Signature'] = generate_signature(prepared_request.body, webhook.secret)
+
+    # Send the request
+    with requests.Session() as session:
+        session.verify = webhook.ssl_verification
+        if webhook.ca_file_path:
+            session.verify = webhook.ca_file_path
+        response = session.send(prepared_request, proxies=settings.HTTP_PROXIES)
+
+    if 200 <= response.status_code <= 299:
+        logger.info(f"Request succeeded; response status {response.status_code}")
+        return f"Status {response.status_code} returned, webhook successfully processed."
+    else:
+        logger.warning(f"Request failed; response status {response.status_code}: {response.content}")
+        raise requests.exceptions.RequestException(
+            f"Status {response.status_code} returned with content '{response.content}', webhook FAILED to process."
+        )

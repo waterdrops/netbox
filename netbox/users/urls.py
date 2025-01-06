@@ -1,19 +1,21 @@
-from django.urls import path
+from django.urls import include, path
 
-from . import views
+from utilities.urls import get_model_urls
+from . import views  # noqa F401
 
-app_name = 'user'
+app_name = 'users'
 urlpatterns = [
 
-    path('profile/', views.ProfileView.as_view(), name='profile'),
-    path('preferences/', views.UserConfigView.as_view(), name='preferences'),
-    path('password/', views.ChangePasswordView.as_view(), name='change_password'),
-    path('api-tokens/', views.TokenListView.as_view(), name='token_list'),
-    path('api-tokens/add/', views.TokenEditView.as_view(), name='token_add'),
-    path('api-tokens/<int:pk>/edit/', views.TokenEditView.as_view(), name='token_edit'),
-    path('api-tokens/<int:pk>/delete/', views.TokenDeleteView.as_view(), name='token_delete'),
-    path('user-key/', views.UserKeyView.as_view(), name='userkey'),
-    path('user-key/edit/', views.UserKeyEditView.as_view(), name='userkey_edit'),
-    path('session-key/delete/', views.SessionKeyDeleteView.as_view(), name='sessionkey_delete'),
+    path('tokens/', include(get_model_urls('users', 'token', detail=False))),
+    path('tokens/<int:pk>/', include(get_model_urls('users', 'token'))),
+
+    path('users/', include(get_model_urls('users', 'user', detail=False))),
+    path('users/<int:pk>/', include(get_model_urls('users', 'user'))),
+
+    path('groups/', include(get_model_urls('users', 'group', detail=False))),
+    path('groups/<int:pk>/', include(get_model_urls('users', 'group'))),
+
+    path('permissions/', include(get_model_urls('users', 'objectpermission', detail=False))),
+    path('permissions/<int:pk>/', include(get_model_urls('users', 'objectpermission'))),
 
 ]

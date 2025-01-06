@@ -1,142 +1,104 @@
-{% extends 'base.html' %}
-{% load buttons %}
-{% load custom_links %}
+{% extends 'generic/object.html' %}
 {% load helpers %}
 {% load plugins %}
+{% load i18n %}
 
-{% block title %}{{ object }}{% endblock %}
-
-{% block header %}
-    <div class="row noprint">
-        <div class="col-sm-8 col-md-9">
-            <ol class="breadcrumb">
-                <li><a href="{% url 'circuits:circuit_list' %}">Circuits</a></li>
-                <li><a href="{% url 'circuits:circuit_list' %}?provider={{ object.provider.slug }}">{{ object.provider }}</a></li>
-                <li>{{ object.cid }}</li>
-            </ol>
-        </div>
-        <div class="col-sm-4 col-md-3">
-            <form action="{% url 'circuits:circuit_list' %}" method="get">
-                <div class="input-group">
-                    <input type="text" name="q" class="form-control" />
-                    <span class="input-group-btn">
-                        <button type="submit" class="btn btn-primary">
-                            <span class="mdi mdi-magnify" aria-hidden="true"></span>
-                        </button>
-                    </span>
-                </div>
-            </form>
-        </div>
-    </div>
-    <div class="pull-right noprint">
-        {% plugin_buttons object %}
-        {% if perms.circuits.add_circuit %}
-            {% clone_button object %}
-        {% endif %}
-        {% if perms.circuits.change_circuit %}
-            {% edit_button object %}
-        {% endif %}
-        {% if perms.circuits.delete_circuit %}
-            {% delete_button object %}
-        {% endif %}
-    </div>
-    <h1>{{ object }}</h1>
-    {% include 'inc/created_updated.html' %}
-    <div class="pull-right noprint">
-        {% custom_links object %}
-    </div>
-    <ul class="nav nav-tabs">
-        <li role="presentation"{% if not active_tab %} class="active"{% endif %}>
-            <a href="{{ object.get_absolute_url }}">Circuit</a>
-        </li>
-        {% if perms.extras.view_objectchange %}
-            <li role="presentation"{% if active_tab == 'changelog' %} class="active"{% endif %}>
-                <a href="{% url 'circuits:circuit_changelog' pk=object.pk %}">Change Log</a>
-            </li>
-        {% endif %}
-    </ul>
+{% block breadcrumbs %}
+  {{ block.super }}
+  <li class="breadcrumb-item"><a href="{% url 'circuits:circuit_list' %}?provider_id={{ object.provider.pk }}">{{ object.provider }}</a></li>
 {% endblock %}
 
 {% block content %}
-<div class="row">
-	<div class="col-md-6">
-        <div class="panel panel-default">
-            <div class="panel-heading">
-                <strong>Circuit</strong>
+  <div class="row">
+    <div class="col col-md-6">
+      <div class="card">
+        <h2 class="card-header">{% trans "Circuit" %}</h2>
+        <table class="table table-hover attr-table">
+          <tr>
+            <th scope="row">{% trans "Provider" %}</th>
+            <td>{{ object.provider|linkify }}</td>
+          </tr>
+          <tr>
+            <th scope="row">{% trans "Account" %}</th>
+            <td>{{ object.provider_account|linkify|placeholder }}</td>
+          </tr>
+          <tr>
+            <th scope="row">{% trans "Circuit ID" %}</th>
+            <td>{{ object.cid }}</td>
+          </tr>
+          <tr>
+            <th scope="row">{% trans "Type" %}</th>
+            <td>{{ object.type|linkify }}</td>
+          </tr>
+          <tr>
+            <th scope="row">{% trans "Status" %}</th>
+            <td>{% badge object.get_status_display bg_color=object.get_status_color %}</td>
+          </tr>
+          <tr>
+            <th scope="row">{% trans "Distance" %}</th>
+            <td>
+              {% if object.distance is not None %}
+                {{ object.distance|floatformat }} {{ object.get_distance_unit_display }}
+              {% else %}
+                {{ ''|placeholder }}
+              {% endif %}
+            </td>
+          </tr>
+          <tr>
+            <th scope="row">{% trans "Tenant" %}</th>
+            <td>
+              {% if object.tenant.group %}
+                {{ object.tenant.group|linkify }} /
+              {% endif %}
+              {{ object.tenant|linkify|placeholder }}
+            </td>
+          </tr>
+          <tr>
+            <th scope="row">{% trans "Install Date" %}</th>
+            <td>{{ object.install_date|isodate|placeholder }}</td>
+          </tr>
+          <tr>
+            <th scope="row">{% trans "Termination Date" %}</th>
+            <td>{{ object.termination_date|isodate|placeholder }}</td>
+          </tr>
+          <tr>
+            <th scope="row">{% trans "Commit Rate" %}</th>
+            <td>{{ object.commit_rate|humanize_speed|placeholder }}</td>
+          </tr>
+          <tr>
+            <th scope="row">{% trans "Description" %}</th>
+            <td>{{ object.description|placeholder }}</td>
+          </tr>
+        </table>
+      </div>
+      <div class="card">
+        <h2 class="card-header">
+          {% trans "Group Assignments" %}
+          {% if perms.circuits.add_circuitgroupassignment %}
+            <div class="card-actions">
+              <a href="{% url 'circuits:circuitgroupassignment_add' %}?member_type={{ object|content_type_id }}&member={{ object.pk }}&return_url={{ object.get_absolute_url }}" class="btn btn-ghost-primary btn-sm">
+                <span class="mdi mdi-plus-thick" aria-hidden="true"></span> {% trans "Assign Group" %}
+              </a>
             </div>
-            <table class="table table-hover panel-body attr-table">
-                <tr>
-                    <td>Status</td>
-                    <td>
-                        <span class="label label-{{ object.get_status_class }}">{{ object.get_status_display }}</span>
-                    </td>
-                </tr>
-                <tr>
-                    <td>Provider</td>
-                    <td>
-                        <a href="{% url 'circuits:provider' slug=object.provider.slug %}">{{ object.provider }}</a>
-                    </td>
-                </tr>
-                <tr>
-                    <td>Circuit ID</td>
-                    <td>{{ object.cid }}</td>
-                </tr>
-                <tr>
-                    <td>Type</td>
-                    <td><a href="{{ object.type.get_absolute_url }}">{{ object.type }}</a></td>
-                </tr>
-                <tr>
-                    <td>Tenant</td>
-                    <td>
-                        {% if object.tenant %}
-                            {% if object.tenant.group %}
-                                <a href="{{ object.tenant.group.get_absolute_url }}">{{ object.tenant.group }}</a> /
-                            {% endif %}
-                            <a href="{{ object.tenant.get_absolute_url }}">{{ object.tenant }}</a>
-                        {% else %}
-                            <span class="text-muted">None</span>
-                        {% endif %}
-                    </td>
-                </tr>
-                <tr>
-                    <td>Install Date</td>
-                    <td>{{ object.install_date|placeholder }}</td>
-                </tr>
-                <tr>
-                    <td>Commit Rate</td>
-                    <td>{{ object.commit_rate|humanize_speed|placeholder }}</td>
-                </tr>
-                <tr>
-                    <td>Description</td>
-                    <td>{{ object.description|placeholder }}</td>
-                </tr>
-            </table>
-        </div>
-        {% include 'inc/custom_fields_panel.html' %}
-        {% include 'extras/inc/tags_panel.html' with tags=object.tags.all url='circuits:circuit_list' %}
-        <div class="panel panel-default">
-            <div class="panel-heading">
-                <strong>Comments</strong>
-            </div>
-            <div class="panel-body rendered-markdown">
-                {% if object.comments %}
-                    {{ object.comments|render_markdown }}
-                {% else %}
-                    <span class="text-muted">None</span>
-                {% endif %}
-            </div>
-        </div>
-        {% plugin_left_page object %}
-	</div>
-	<div class="col-md-6">
-        {% include 'circuits/inc/circuit_termination.html' with termination=termination_a side='A' %}
-        {% include 'circuits/inc/circuit_termination.html' with termination=termination_z side='Z' %}
-        {% plugin_right_page object %}
+          {% endif %}
+        </h2>
+        {% htmx_table 'circuits:circuitgroupassignment_list' circuit_id=object.pk %}
+      </div>
+      {% include 'inc/panels/custom_fields.html' %}
+      {% include 'inc/panels/tags.html' %}
+      {% include 'inc/panels/comments.html' %}
+      {% plugin_left_page object %}
     </div>
-</div>
-<div class="row">
-    <div class="col-md-12">
-        {% plugin_full_width_page object %}
+    <div class="col col-md-6">
+      {% include 'circuits/inc/circuit_termination.html' with termination=object.termination_a side='A' %}
+      {% include 'circuits/inc/circuit_termination.html' with termination=object.termination_z side='Z' %}
+      {% include 'inc/panels/image_attachments.html' %}
+      {% plugin_right_page object %}
     </div>
-</div>
+  </div>
+  <div class="row">
+    <div class="col col-md-12">
+      {% plugin_full_width_page object %}
+    </div>
+  </div>
 {% endblock %}

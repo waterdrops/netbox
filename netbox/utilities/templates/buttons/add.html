@@ -1,3 +1,6 @@
-<a href="{{ add_url }}" class="btn btn-primary">
-    <span class="mdi mdi-plus-thick" aria-hidden="true"></span> Add
-</a>
+{% if url %}
+{% load i18n %}
+  <a href="{{ url }}" type="button" class="btn btn-primary">
+    <i class="mdi mdi-plus-thick"></i> {% trans "Add" %}
+  </a>
+{% endif %}

@@ -1,30 +1,27 @@
-from django.urls import path
+from django.urls import include, path
 
-from extras.views import ObjectChangeLogView
-from . import views
-from .models import Tenant, TenantGroup
+from utilities.urls import get_model_urls
+from . import views  # noqa F401
 
 app_name = 'tenancy'
 urlpatterns = [
 
-    # Tenant groups
-    path('tenant-groups/', views.TenantGroupListView.as_view(), name='tenantgroup_list'),
-    path('tenant-groups/add/', views.TenantGroupEditView.as_view(), name='tenantgroup_add'),
-    path('tenant-groups/import/', views.TenantGroupBulkImportView.as_view(), name='tenantgroup_import'),
-    path('tenant-groups/delete/', views.TenantGroupBulkDeleteView.as_view(), name='tenantgroup_bulk_delete'),
-    path('tenant-groups/<slug:slug>/edit/', views.TenantGroupEditView.as_view(), name='tenantgroup_edit'),
-    path('tenant-groups/<slug:slug>/delete/', views.TenantGroupDeleteView.as_view(), name='tenantgroup_delete'),
-    path('tenant-groups/<slug:slug>/changelog/', ObjectChangeLogView.as_view(), name='tenantgroup_changelog', kwargs={'model': TenantGroup}),
+    path('tenant-groups/', include(get_model_urls('tenancy', 'tenantgroup', detail=False))),
+    path('tenant-groups/<int:pk>/', include(get_model_urls('tenancy', 'tenantgroup'))),
 
-    # Tenants
-    path('tenants/', views.TenantListView.as_view(), name='tenant_list'),
-    path('tenants/add/', views.TenantEditView.as_view(), name='tenant_add'),
-    path('tenants/import/', views.TenantBulkImportView.as_view(), name='tenant_import'),
-    path('tenants/edit/', views.TenantBulkEditView.as_view(), name='tenant_bulk_edit'),
-    path('tenants/delete/', views.TenantBulkDeleteView.as_view(), name='tenant_bulk_delete'),
-    path('tenants/<slug:slug>/', views.TenantView.as_view(), name='tenant'),
-    path('tenants/<slug:slug>/edit/', views.TenantEditView.as_view(), name='tenant_edit'),
-    path('tenants/<slug:slug>/delete/', views.TenantDeleteView.as_view(), name='tenant_delete'),
-    path('tenants/<slug:slug>/changelog/', ObjectChangeLogView.as_view(), name='tenant_changelog', kwargs={'model': Tenant}),
+    path('tenants/', include(get_model_urls('tenancy', 'tenant', detail=False))),
+    path('tenants/<int:pk>/', include(get_model_urls('tenancy', 'tenant'))),
+
+    path('contact-groups/', include(get_model_urls('tenancy', 'contactgroup', detail=False))),
+    path('contact-groups/<int:pk>/', include(get_model_urls('tenancy', 'contactgroup'))),
+
+    path('contact-roles/', include(get_model_urls('tenancy', 'contactrole', detail=False))),
+    path('contact-roles/<int:pk>/', include(get_model_urls('tenancy', 'contactrole'))),
+
+    path('contacts/', include(get_model_urls('tenancy', 'contact', detail=False))),
+    path('contacts/<int:pk>/', include(get_model_urls('tenancy', 'contact'))),
+
+    path('contact-assignments/', include(get_model_urls('tenancy', 'contactassignment', detail=False))),
+    path('contact-assignments/<int:pk>/', include(get_model_urls('tenancy', 'contactassignment'))),
 
 ]

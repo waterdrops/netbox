@@ -1,48 +1,84 @@
-from django.urls import path
+from django.urls import include, path
 
 from extras import views
-from extras.models import ConfigContext, Tag
+from utilities.urls import get_model_urls
 
 
 app_name = 'extras'
 urlpatterns = [
 
-    # Tags
-    path('tags/', views.TagListView.as_view(), name='tag_list'),
-    path('tags/add/', views.TagEditView.as_view(), name='tag_add'),
-    path('tags/import/', views.TagBulkImportView.as_view(), name='tag_import'),
-    path('tags/edit/', views.TagBulkEditView.as_view(), name='tag_bulk_edit'),
-    path('tags/delete/', views.TagBulkDeleteView.as_view(), name='tag_bulk_delete'),
-    path('tags/<str:slug>/edit/', views.TagEditView.as_view(), name='tag_edit'),
-    path('tags/<str:slug>/delete/', views.TagDeleteView.as_view(), name='tag_delete'),
-    path('tags/<str:slug>/changelog/', views.ObjectChangeLogView.as_view(), name='tag_changelog', kwargs={'model': Tag}),
+    path('custom-fields/', include(get_model_urls('extras', 'customfield', detail=False))),
+    path('custom-fields/<int:pk>/', include(get_model_urls('extras', 'customfield'))),
 
-    # Config contexts
-    path('config-contexts/', views.ConfigContextListView.as_view(), name='configcontext_list'),
-    path('config-contexts/add/', views.ConfigContextEditView.as_view(), name='configcontext_add'),
-    path('config-contexts/edit/', views.ConfigContextBulkEditView.as_view(), name='configcontext_bulk_edit'),
-    path('config-contexts/delete/', views.ConfigContextBulkDeleteView.as_view(), name='configcontext_bulk_delete'),
-    path('config-contexts/<int:pk>/', views.ConfigContextView.as_view(), name='configcontext'),
-    path('config-contexts/<int:pk>/edit/', views.ConfigContextEditView.as_view(), name='configcontext_edit'),
-    path('config-contexts/<int:pk>/delete/', views.ConfigContextDeleteView.as_view(), name='configcontext_delete'),
-    path('config-contexts/<int:pk>/changelog/', views.ObjectChangeLogView.as_view(), name='configcontext_changelog', kwargs={'model': ConfigContext}),
+    path('custom-field-choices/', include(get_model_urls('extras', 'customfieldchoiceset', detail=False))),
+    path('custom-field-choices/<int:pk>/', include(get_model_urls('extras', 'customfieldchoiceset'))),
 
-    # Image attachments
-    path('image-attachments/<int:pk>/edit/', views.ImageAttachmentEditView.as_view(), name='imageattachment_edit'),
-    path('image-attachments/<int:pk>/delete/', views.ImageAttachmentDeleteView.as_view(), name='imageattachment_delete'),
+    path('custom-links/', include(get_model_urls('extras', 'customlink', detail=False))),
+    path('custom-links/<int:pk>/', include(get_model_urls('extras', 'customlink'))),
 
-    # Change logging
-    path('changelog/', views.ObjectChangeListView.as_view(), name='objectchange_list'),
-    path('changelog/<int:pk>/', views.ObjectChangeView.as_view(), name='objectchange'),
+    path('export-templates/', include(get_model_urls('extras', 'exporttemplate', detail=False))),
+    path('export-templates/<int:pk>/', include(get_model_urls('extras', 'exporttemplate'))),
 
-    # Reports
-    path('reports/', views.ReportListView.as_view(), name='report_list'),
-    path('reports/<str:module>.<str:name>/', views.ReportView.as_view(), name='report'),
-    path('reports/results/<int:job_result_pk>/', views.ReportResultView.as_view(), name='report_result'),
+    path('saved-filters/', include(get_model_urls('extras', 'savedfilter', detail=False))),
+    path('saved-filters/<int:pk>/', include(get_model_urls('extras', 'savedfilter'))),
+
+    path('bookmarks/', include(get_model_urls('extras', 'bookmark', detail=False))),
+    path('bookmarks/<int:pk>/', include(get_model_urls('extras', 'bookmark'))),
+
+    path('notification-groups/', include(get_model_urls('extras', 'notificationgroup', detail=False))),
+    path('notification-groups/<int:pk>/', include(get_model_urls('extras', 'notificationgroup'))),
+
+    path('notifications/', views.NotificationsView.as_view(), name='notifications'),
+    path('notifications/', include(get_model_urls('extras', 'notification', detail=False))),
+    path('notifications/<int:pk>/', include(get_model_urls('extras', 'notification'))),
+
+    path('subscriptions/', include(get_model_urls('extras', 'subscription', detail=False))),
+    path('subscriptions/<int:pk>/', include(get_model_urls('extras', 'subscription'))),
+
+    path('webhooks/', include(get_model_urls('extras', 'webhook', detail=False))),
+    path('webhooks/<int:pk>/', include(get_model_urls('extras', 'webhook'))),
+
+    path('event-rules/', include(get_model_urls('extras', 'eventrule', detail=False))),
+    path('event-rules/<int:pk>/', include(get_model_urls('extras', 'eventrule'))),
+
+    path('tags/', include(get_model_urls('extras', 'tag', detail=False))),
+    path('tags/<int:pk>/', include(get_model_urls('extras', 'tag'))),
+
+    path('config-contexts/', include(get_model_urls('extras', 'configcontext', detail=False))),
+    path('config-contexts/<int:pk>/', include(get_model_urls('extras', 'configcontext'))),
+
+    path('config-templates/', include(get_model_urls('extras', 'configtemplate', detail=False))),
+    path('config-templates/<int:pk>/', include(get_model_urls('extras', 'configtemplate'))),
+
+    path('image-attachments/', include(get_model_urls('extras', 'imageattachment', detail=False))),
+    path('image-attachments/<int:pk>/', include(get_model_urls('extras', 'imageattachment'))),
+
+    path('journal-entries/', include(get_model_urls('extras', 'journalentry', detail=False))),
+    path('journal-entries/<int:pk>/', include(get_model_urls('extras', 'journalentry'))),
+
+    # User dashboard
+    path('dashboard/reset/', views.DashboardResetView.as_view(), name='dashboard_reset'),
+    path('dashboard/widgets/add/', views.DashboardWidgetAddView.as_view(), name='dashboardwidget_add'),
+    path(
+        'dashboard/widgets/<uuid:id>/configure/',
+        views.DashboardWidgetConfigView.as_view(),
+        name='dashboardwidget_config'
+    ),
+    path(
+        'dashboard/widgets/<uuid:id>/delete/',
+        views.DashboardWidgetDeleteView.as_view(),
+        name='dashboardwidget_delete'
+    ),
 
     # Scripts
     path('scripts/', views.ScriptListView.as_view(), name='script_list'),
-    path('scripts/<str:module>.<str:name>/', views.ScriptView.as_view(), name='script'),
-    path('scripts/results/<int:job_result_pk>/', views.ScriptResultView.as_view(), name='script_result'),
+    path('scripts/add/', views.ScriptModuleCreateView.as_view(), name='scriptmodule_add'),
+    path('scripts/results/<int:job_pk>/', views.ScriptResultView.as_view(), name='script_result'),
+    path('scripts/<int:pk>/', views.ScriptView.as_view(), name='script'),
+    path('scripts/<int:pk>/source/', views.ScriptSourceView.as_view(), name='script_source'),
+    path('scripts/<int:pk>/jobs/', views.ScriptJobsView.as_view(), name='script_jobs'),
+    path('script-modules/<int:pk>/', include(get_model_urls('extras', 'scriptmodule'))),
 
+    # Markdown
+    path('render/markdown/', views.RenderMarkdownView.as_view(), name="render_markdown"),
 ]

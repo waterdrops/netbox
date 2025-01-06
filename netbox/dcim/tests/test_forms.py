@@ -1,7 +1,9 @@
 from django.test import TestCase
 
+from dcim.choices import DeviceFaceChoices, DeviceStatusChoices, InterfaceTypeChoices
 from dcim.forms import *
 from dcim.models import *
+from utilities.testing import create_test_device
 from virtualization.models import Cluster, ClusterGroup, ClusterType
 
 
@@ -20,12 +22,12 @@ class DeviceTestCase(TestCase):
         device_type = DeviceType.objects.create(
             manufacturer=manufacturer, model='Device Type 1', slug='device-type-1', u_height=1
         )
-        device_role = DeviceRole.objects.create(
+        role = DeviceRole.objects.create(
             name='Device Role 1', slug='device-role-1', color='ff0000'
         )
         Platform.objects.create(name='Platform 1', slug='platform-1')
         Device.objects.create(
-            name='Device 1', device_type=device_type, device_role=device_role, site=site, rack=rack, position=1
+            name='Device 1', device_type=device_type, role=role, site=site, rack=rack, position=1
         )
         cluster_type = ClusterType.objects.create(name='Cluster Type 1', slug='cluster-type-1')
         cluster_group = ClusterGroup.objects.create(name='Cluster Group 1', slug='cluster-group-1')
@@ -34,7 +36,7 @@ class DeviceTestCase(TestCase):
     def test_racked_device(self):
         form = DeviceForm(data={
             'name': 'New Device',
-            'device_role': DeviceRole.objects.first().pk,
+            'role': DeviceRole.objects.first().pk,
             'tenant': None,
             'manufacturer': Manufacturer.objects.first().pk,
             'device_type': DeviceType.objects.first().pk,
@@ -51,7 +53,7 @@ class DeviceTestCase(TestCase):
     def test_racked_device_occupied(self):
         form = DeviceForm(data={
             'name': 'test',
-            'device_role': DeviceRole.objects.first().pk,
+            'role': DeviceRole.objects.first().pk,
             'tenant': None,
             'manufacturer': Manufacturer.objects.first().pk,
             'device_type': DeviceType.objects.first().pk,
@@ -68,7 +70,7 @@ class DeviceTestCase(TestCase):
     def test_non_racked_device(self):
         form = DeviceForm(data={
             'name': 'New Device',
-            'device_role': DeviceRole.objects.first().pk,
+            'role': DeviceRole.objects.first().pk,
             'tenant': None,
             'manufacturer': Manufacturer.objects.first().pk,
             'device_type': DeviceType.objects.first().pk,
@@ -85,7 +87,7 @@ class DeviceTestCase(TestCase):
     def test_non_racked_device_with_face(self):
         form = DeviceForm(data={
             'name': 'New Device',
-            'device_role': DeviceRole.objects.first().pk,
+            'role': DeviceRole.objects.first().pk,
             'tenant': None,
             'manufacturer': Manufacturer.objects.first().pk,
             'device_type': DeviceType.objects.first().pk,
@@ -101,7 +103,7 @@ class DeviceTestCase(TestCase):
     def test_non_racked_device_with_position(self):
         form = DeviceForm(data={
             'name': 'New Device',
-            'device_role': DeviceRole.objects.first().pk,
+            'role': DeviceRole.objects.first().pk,
             'tenant': None,
             'manufacturer': Manufacturer.objects.first().pk,
             'device_type': DeviceType.objects.first().pk,
@@ -119,39 +121,33 @@ class LabelTestCase(TestCase):
 
     @classmethod
     def setUpTestData(cls):
-        site = Site.objects.create(name='Site 2', slug='site-2')
-        manufacturer = Manufacturer.objects.create(name='Manufacturer 2', slug='manufacturer-2')
-        cls.device_type = DeviceType.objects.create(
-            manufacturer=manufacturer, model='Device Type 2', slug='device-type-2', u_height=1
-        )
-        device_role = DeviceRole.objects.create(
-            name='Device Role 2', slug='device-role-2', color='ffff00'
-        )
-        cls.device = Device.objects.create(
-            name='Device 2', device_type=cls.device_type, device_role=device_role, site=site
-        )
+        cls.device = create_test_device('Device 1')
 
     def test_interface_label_count_valid(self):
-        """Test that a `label` can be generated for each generated `name` from `name_pattern` on InterfaceCreateForm"""
+        """
+        Test that generating an equal number of names and labels passes form validation.
+        """
         interface_data = {
             'device': self.device.pk,
-            'name_pattern': 'eth[0-9]',
-            'label_pattern': 'Interface[0-9]',
-            'type': InterfaceTypeChoices.TYPE_100ME_FIXED,
+            'name': 'eth[0-9]',
+            'label': 'Interface[0-9]',
+            'type': InterfaceTypeChoices.TYPE_1GE_GBIC,
         }
         form = InterfaceCreateForm(interface_data)
 
         self.assertTrue(form.is_valid())
 
     def test_interface_label_count_mismatch(self):
-        """Test that a `label` cannot be generated for each generated `name` from `name_pattern` due to invalid `label_pattern` on InterfaceCreateForm"""
+        """
+        Check that attempting to generate a differing number of names and labels results in a validation error.
+        """
         bad_interface_data = {
             'device': self.device.pk,
-            'name_pattern': 'eth[0-9]',
-            'label_pattern': 'Interface[0-1]',
-            'type': InterfaceTypeChoices.TYPE_100ME_FIXED,
+            'name': 'eth[0-9]',
+            'label': 'Interface[0-1]',
+            'type': InterfaceTypeChoices.TYPE_1GE_GBIC,
         }
         form = InterfaceCreateForm(bad_interface_data)
 
         self.assertFalse(form.is_valid())
-        self.assertIn('label_pattern', form.errors)
+        self.assertIn('label', form.errors)

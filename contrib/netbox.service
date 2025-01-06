@@ -1,6 +1,6 @@
 [Unit]
 Description=NetBox WSGI Service
-Documentation=https://netbox.readthedocs.io/en/stable/
+Documentation=https://docs.netbox.dev/
 After=network-online.target
 Wants=network-online.target
 
@@ -12,7 +12,11 @@ Group=netbox
 PIDFile=/var/tmp/netbox.pid
 WorkingDirectory=/opt/netbox
 
+# Remove the following line if using uWSGI instead of Gunicorn
 ExecStart=/opt/netbox/venv/bin/gunicorn --pid /var/tmp/netbox.pid --pythonpath /opt/netbox/netbox --config /opt/netbox/gunicorn.py netbox.wsgi
+
+# Uncomment the following line if using uWSGI instead of Gunicorn
+#ExecStart=/opt/netbox/venv/bin/uwsgi --ini /opt/netbox/uwsgi.ini
 
 Restart=on-failure
 RestartSec=30

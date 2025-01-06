@@ -1,96 +1,68 @@
-{% extends 'base.html' %}
+{% extends 'generic/object.html' %}
 {% load buttons %}
-{% load custom_links %}
 {% load helpers %}
+{% load perms %}
 {% load plugins %}
+{% load i18n %}
+
+{% block breadcrumbs %}
+  {{ block.super }}
+  {% if object.device %}
+    <li class="breadcrumb-item"><a href="{% url 'ipam:service_list' %}?device_id={{ object.device.pk }}">{{ object.device }}</a></li>
+  {% elif object.virtual_machine %}
+    <li class="breadcrumb-item"><a href="{% url 'ipam:service_list' %}?virtual_machine_id={{ object.virtual_machine.pk }}">{{ object.virtual_machine }}</a></li>
+  {% endif %}
+{% endblock %}
 
 {% block content %}
-<div class="row noprint">
-    <div class="col-sm-8 col-md-9">
-        <ol class="breadcrumb">
-            <li><a href="{% url 'ipam:service_list' %}">Services</a></li>
-            <li><a href="{{ object.parent.get_absolute_url }}">{{ object.parent }}</a></li>
-            <li>{{ object }}</li>
-        </ol>
-    </div>
-    <div class="col-sm-4 col-md-3">
-        <form action="{% url 'ipam:service_list' %}" method="get">
-            <div class="input-group">
-                <input type="text" name="q" class="form-control" placeholder="Search Services" />
-                <span class="input-group-btn">
-                    <button type="submit" class="btn btn-primary">
-                        <span class="mdi mdi-magnify" aria-hidden="true"></span>
-                    </button>
-                </span>
-            </div>
-        </form>
-    </div>
-</div>
-<div class="pull-right">
-    {% plugin_buttons object %}
-    {% if perms.dcim.change_service %}
-        {% edit_button object %}
-    {% endif %}
-    {% if perms.dcim.delete_service %}
-        {% delete_button object %}
-    {% endif %}
-</div>
-<h1>{% block title %}{{ object }}{% endblock %}</h1>
-{% include 'inc/created_updated.html' %}
-<div class="pull-right noprint">
-    {% custom_links object %}
-</div>
-<div class="row">
-	<div class="col-md-6">
-        <div class="panel panel-default">
-            <div class="panel-heading">
-                <strong>Service</strong>
-            </div>
-            <table class="table table-hover panel-body attr-table">
+<div class="row mb-3">
+	<div class="col col-md-6">
+        <div class="card">
+            <h2 class="card-header">{% trans "Service" %}</h2>
+            <table class="table table-hover attr-table">
                 <tr>
-                    <td>Name</td>
+                    <th scope="row">{% trans "Name" %}</th>
                     <td>{{ object.name }}</td>
                 </tr>
                 <tr>
-                    <td>Parent</td>
-                    <td>
-                        <a href="{{ object.parent.get_absolute_url }}">{{ object.parent }}</a>
-                    </td>
+                    <th scope="row">{% trans "Parent" %}</th>
+                    <td>{{ object.parent|linkify }}</td>
                 </tr>
                 <tr>
-                    <td>Protocol</td>
+                    <th scope="row">{% trans "Protocol" %}</th>
                     <td>{{ object.get_protocol_display }}</td>
                 </tr>
                 <tr>
-                    <td>Ports</td>
+                    <th scope="row">{% trans "Ports" %}</th>
                     <td>{{ object.port_list }}</td>
                 </tr>
                 <tr>
-                    <td>IP Addresses</td>
+                    <th scope="row">{% trans "IP Addresses" %}</th>
                     <td>
                         {% for ipaddress in object.ipaddresses.all %}
-                            <a href="{{ ipaddress.get_absolute_url }}">{{ ipaddress }}</a><br />
+                            {{ ipaddress|linkify }}<br />
                         {% empty %}
-                            <span class="text-muted">None</span>
+                            {{ ''|placeholder }}
                         {% endfor %}
                     </td>
                 </tr>
                 <tr>
-                    <td>Description</td>
+                    <th scope="row">{% trans "Description" %}</th>
                     <td>{{ object.description|placeholder }}</td>
                 </tr>
-		    </table>
+            </table>
         </div>
-        {% include 'inc/custom_fields_panel.html' %}
-        {% include 'extras/inc/tags_panel.html' with tags=object.tags.all url='ipam:service_list' %}
         {% plugin_left_page object %}
     </div>
-    <div class="col-md-6">
-        {% plugin_right_page object %}
+    <div class="col col-md-6">
+      {% include 'inc/panels/custom_fields.html' %}
+      {% include 'inc/panels/tags.html' %}
+      {% include 'inc/panels/comments.html' %}
+      {% plugin_right_page object %}
     </div>
 </div>
-<div class="row">
-    <div class="col-md-12">
+<div class="row mb-3">
+    <div class="col col-md-12">
         {% plugin_full_width_page object %}
     </div>
 </div>

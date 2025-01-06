@@ -1,18 +1,21 @@
-from django.contrib.auth.models import User
+from django.test import override_settings
 from django.urls import reverse
+from django.utils.translation import gettext as _
 from rest_framework import status
 
 from dcim.choices import *
 from dcim.constants import *
-from dcim.models import (
-    Cable, ConsolePort, ConsolePortTemplate, ConsoleServerPort, ConsoleServerPortTemplate, Device, DeviceBay,
-    DeviceBayTemplate, DeviceRole, DeviceType, FrontPort, FrontPortTemplate, Interface, InterfaceTemplate, Manufacturer,
-    InventoryItem, Platform, PowerFeed, PowerPort, PowerPortTemplate, PowerOutlet, PowerOutletTemplate, PowerPanel,
-    Rack, RackGroup, RackReservation, RackRole, RearPort, RearPortTemplate, Region, Site, VirtualChassis,
-)
-from ipam.models import VLAN
-from utilities.testing import APITestCase, APIViewTestCases
+from dcim.models import *
+from extras.models import ConfigTemplate
+from ipam.choices import VLANQinQRoleChoices
+from ipam.models import ASN, RIR, VLAN, VRF
+from netbox.api.serializers import GenericObjectSerializer
+from tenancy.models import Tenant
+from users.models import User
+from utilities.testing import APITestCase, APIViewTestCases, create_test_device
 from virtualization.models import Cluster, ClusterType
+from wireless.choices import WirelessChannelChoices
+from wireless.models import WirelessLAN
 
 
 class AppTest(APITestCase):
@@ -38,16 +41,16 @@ class Mixins:
             peer_device = Device.objects.create(
                 site=Site.objects.first(),
                 device_type=DeviceType.objects.first(),
-                device_role=DeviceRole.objects.first(),
+                role=DeviceRole.objects.first(),
                 name='Peer Device'
             )
             if self.peer_termination_type is None:
-                raise NotImplementedError("Test case must set peer_termination_type")
+                raise NotImplementedError(_("Test case must set peer_termination_type"))
             peer_obj = self.peer_termination_type.objects.create(
                 device=peer_device,
                 name='Peer Termination'
             )
-            cable = Cable(termination_a=obj, termination_b=peer_obj, label='Cable 1')
+            cable = Cable(a_terminations=[obj], b_terminations=[peer_obj], label='Cable 1')
             cable.save()
 
             self.add_permissions(f'dcim.view_{self.model._meta.model_name}')
@@ -57,14 +60,14 @@ class Mixins:
             self.assertHttpStatus(response, status.HTTP_200_OK)
             self.assertEqual(len(response.data), 1)
             segment1 = response.data[0]
-            self.assertEqual(segment1[0]['name'], obj.name)
+            self.assertEqual(segment1[0][0]['name'], obj.name)
             self.assertEqual(segment1[1]['label'], cable.label)
-            self.assertEqual(segment1[2]['name'], peer_obj.name)
+            self.assertEqual(segment1[2][0]['name'], peer_obj.name)
 
 
 class RegionTest(APIViewTestCases.APIViewTestCase):
     model = Region
-    brief_fields = ['_depth', 'id', 'name', 'site_count', 'slug', 'url']
+    brief_fields = ['_depth', 'description', 'display', 'id', 'name', 'site_count', 'slug', 'url']
     create_data = [
         {
             'name': 'Region 4',
@@ -91,9 +94,38 @@ class RegionTest(APIViewTestCases.APIViewTestCase):
         Region.objects.create(name='Region 3', slug='region-3')
 
 
+class SiteGroupTest(APIViewTestCases.APIViewTestCase):
+    model = SiteGroup
+    brief_fields = ['_depth', 'description', 'display', 'id', 'name', 'site_count', 'slug', 'url']
+    create_data = [
+        {
+            'name': 'Site Group 4',
+            'slug': 'site-group-4',
+        },
+        {
+            'name': 'Site Group 5',
+            'slug': 'site-group-5',
+        },
+        {
+            'name': 'Site Group 6',
+            'slug': 'site-group-6',
+        },
+    ]
+    bulk_update_data = {
+        'description': 'New description',
+    }
+
+    @classmethod
+    def setUpTestData(cls):
+
+        SiteGroup.objects.create(name='Site Group 1', slug='site-group-1')
+        SiteGroup.objects.create(name='Site Group 2', slug='site-group-2')
+        SiteGroup.objects.create(name='Site Group 3', slug='site-group-3')
+
+
 class SiteTest(APIViewTestCases.APIViewTestCase):
     model = Site
-    brief_fields = ['id', 'name', 'slug', 'url']
+    brief_fields = ['description', 'display', 'id', 'name', 'slug', 'url']
     bulk_update_data = {
         'status': 'planned',
     }
@@ -102,45 +134,66 @@ class SiteTest(APIViewTestCases.APIViewTestCase):
     def setUpTestData(cls):
 
         regions = (
-            Region.objects.create(name='Test Region 1', slug='test-region-1'),
-            Region.objects.create(name='Test Region 2', slug='test-region-2'),
+            Region.objects.create(name='Region 1', slug='region-1'),
+            Region.objects.create(name='Region 2', slug='region-2'),
+        )
+
+        groups = (
+            SiteGroup.objects.create(name='Site Group 1', slug='site-group-1'),
+            SiteGroup.objects.create(name='Site Group 2', slug='site-group-2'),
         )
 
         sites = (
-            Site(region=regions[0], name='Site 1', slug='site-1'),
-            Site(region=regions[0], name='Site 2', slug='site-2'),
-            Site(region=regions[0], name='Site 3', slug='site-3'),
+            Site(region=regions[0], group=groups[0], name='Site 1', slug='site-1'),
+            Site(region=regions[0], group=groups[0], name='Site 2', slug='site-2'),
+            Site(region=regions[0], group=groups[0], name='Site 3', slug='site-3'),
         )
         Site.objects.bulk_create(sites)
+
+        rir = RIR.objects.create(name='RFC 6996', is_private=True)
+        tenant = Tenant.objects.create(name='Tenant 1', slug='tenant-1')
+
+        asns = [
+            ASN(asn=65000 + i, rir=rir) for i in range(8)
+        ]
+        ASN.objects.bulk_create(asns)
 
         cls.create_data = [
             {
                 'name': 'Site 4',
                 'slug': 'site-4',
                 'region': regions[1].pk,
+                'group': groups[1].pk,
                 'status': SiteStatusChoices.STATUS_ACTIVE,
+                'asns': [asns[0].pk, asns[1].pk],
+                'tenant': tenant.pk,
             },
             {
                 'name': 'Site 5',
                 'slug': 'site-5',
                 'region': regions[1].pk,
+                'group': groups[1].pk,
                 'status': SiteStatusChoices.STATUS_ACTIVE,
+                'asns': [asns[2].pk, asns[3].pk],
             },
             {
                 'name': 'Site 6',
                 'slug': 'site-6',
                 'region': regions[1].pk,
+                'group': groups[1].pk,
                 'status': SiteStatusChoices.STATUS_ACTIVE,
+                'asns': [asns[4].pk, asns[5].pk],
             },
         ]
 
 
-class RackGroupTest(APIViewTestCases.APIViewTestCase):
-    model = RackGroup
-    brief_fields = ['_depth', 'id', 'name', 'rack_count', 'slug', 'url']
+class LocationTest(APIViewTestCases.APIViewTestCase):
+    model = Location
+    brief_fields = ['_depth', 'description', 'display', 'id', 'name', 'rack_count', 'slug', 'url']
     bulk_update_data = {
         'description': 'New description',
     }
+    user_permissions = ('dcim.view_site',)
 
     @classmethod
     def setUpTestData(cls):
@@ -151,40 +204,71 @@ class RackGroupTest(APIViewTestCases.APIViewTestCase):
         )
         Site.objects.bulk_create(sites)
 
-        parent_rack_groups = (
-            RackGroup.objects.create(site=sites[0], name='Parent Rack Group 1', slug='parent-rack-group-1'),
-            RackGroup.objects.create(site=sites[1], name='Parent Rack Group 2', slug='parent-rack-group-2'),
+        parent_locations = (
+            Location.objects.create(
+                site=sites[0],
+                name='Parent Location 1',
+                slug='parent-location-1',
+                status=LocationStatusChoices.STATUS_ACTIVE,
+            ),
+            Location.objects.create(
+                site=sites[1],
+                name='Parent Location 2',
+                slug='parent-location-2',
+                status=LocationStatusChoices.STATUS_ACTIVE,
+            ),
         )
 
-        RackGroup.objects.create(site=sites[0], name='Rack Group 1', slug='rack-group-1', parent=parent_rack_groups[0])
-        RackGroup.objects.create(site=sites[0], name='Rack Group 2', slug='rack-group-2', parent=parent_rack_groups[0])
-        RackGroup.objects.create(site=sites[0], name='Rack Group 3', slug='rack-group-3', parent=parent_rack_groups[0])
+        Location.objects.create(
+            site=sites[0],
+            name='Location 1',
+            slug='location-1',
+            parent=parent_locations[0],
+            status=LocationStatusChoices.STATUS_ACTIVE,
+        )
+        Location.objects.create(
+            site=sites[0],
+            name='Location 2',
+            slug='location-2',
+            parent=parent_locations[0],
+            status=LocationStatusChoices.STATUS_ACTIVE,
+        )
+        Location.objects.create(
+            site=sites[0],
+            name='Location 3',
+            slug='location-3',
+            parent=parent_locations[0],
+            status=LocationStatusChoices.STATUS_ACTIVE,
+        )
 
         cls.create_data = [
             {
-                'name': 'Test Rack Group 4',
-                'slug': 'test-rack-group-4',
+                'name': 'Test Location 4',
+                'slug': 'test-location-4',
                 'site': sites[1].pk,
-                'parent': parent_rack_groups[1].pk,
+                'parent': parent_locations[1].pk,
+                'status': LocationStatusChoices.STATUS_PLANNED,
             },
             {
-                'name': 'Test Rack Group 5',
-                'slug': 'test-rack-group-5',
+                'name': 'Test Location 5',
+                'slug': 'test-location-5',
                 'site': sites[1].pk,
-                'parent': parent_rack_groups[1].pk,
+                'parent': parent_locations[1].pk,
+                'status': LocationStatusChoices.STATUS_PLANNED,
             },
             {
-                'name': 'Test Rack Group 6',
-                'slug': 'test-rack-group-6',
+                'name': 'Test Location 6',
+                'slug': 'test-location-6',
                 'site': sites[1].pk,
-                'parent': parent_rack_groups[1].pk,
+                # Omit parent to test uniqueness constraint
+                'status': LocationStatusChoices.STATUS_PLANNED,
             },
         ]
 
 
 class RackRoleTest(APIViewTestCases.APIViewTestCase):
     model = RackRole
-    brief_fields = ['id', 'name', 'rack_count', 'slug', 'url']
+    brief_fields = ['description', 'display', 'id', 'name', 'rack_count', 'slug', 'url']
     create_data = [
         {
             'name': 'Rack Role 4',
@@ -217,12 +301,73 @@ class RackRoleTest(APIViewTestCases.APIViewTestCase):
         RackRole.objects.bulk_create(rack_roles)
 
 
+class RackTypeTest(APIViewTestCases.APIViewTestCase):
+    model = RackType
+    brief_fields = ['description', 'display', 'id', 'manufacturer', 'model', 'slug', 'url']
+    bulk_update_data = {
+        'description': 'new description',
+    }
+    user_permissions = ('dcim.view_manufacturer',)
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturers = (
+            Manufacturer(name='Manufacturer 1', slug='manufacturer-1'),
+            Manufacturer(name='Manufacturer 2', slug='manufacturer-2'),
+        )
+        Manufacturer.objects.bulk_create(manufacturers)
+
+        rack_types = (
+            RackType(
+                manufacturer=manufacturers[0],
+                model='Rack Type 1',
+                slug='rack-type-1',
+                form_factor=RackFormFactorChoices.TYPE_CABINET,
+            ),
+            RackType(
+                manufacturer=manufacturers[0],
+                model='Rack Type 2',
+                slug='rack-type-2',
+                form_factor=RackFormFactorChoices.TYPE_CABINET,
+            ),
+            RackType(
+                manufacturer=manufacturers[0],
+                model='Rack Type 3',
+                slug='rack-type-3',
+                form_factor=RackFormFactorChoices.TYPE_CABINET,
+            ),
+        )
+        RackType.objects.bulk_create(rack_types)
+
+        cls.create_data = [
+            {
+                'manufacturer': manufacturers[1].pk,
+                'model': 'Rack Type 4',
+                'slug': 'rack-type-4',
+                'form_factor': RackFormFactorChoices.TYPE_CABINET,
+            },
+            {
+                'manufacturer': manufacturers[1].pk,
+                'model': 'Rack Type 5',
+                'slug': 'rack-type-5',
+                'form_factor': RackFormFactorChoices.TYPE_CABINET,
+            },
+            {
+                'manufacturer': manufacturers[1].pk,
+                'model': 'Rack Type 6',
+                'slug': 'rack-type-6',
+                'form_factor': RackFormFactorChoices.TYPE_CABINET,
+            },
+        ]
+
+
 class RackTest(APIViewTestCases.APIViewTestCase):
     model = Rack
-    brief_fields = ['device_count', 'display_name', 'id', 'name', 'url']
+    brief_fields = ['description', 'device_count', 'display', 'id', 'name', 'url']
     bulk_update_data = {
         'status': 'planned',
     }
+    user_permissions = ('dcim.view_site', )
 
     @classmethod
     def setUpTestData(cls):
@@ -233,9 +378,9 @@ class RackTest(APIViewTestCases.APIViewTestCase):
         )
         Site.objects.bulk_create(sites)
 
-        rack_groups = (
-            RackGroup.objects.create(site=sites[0], name='Rack Group 1', slug='rack-group-1'),
-            RackGroup.objects.create(site=sites[1], name='Rack Group 2', slug='rack-group-2'),
+        locations = (
+            Location.objects.create(site=sites[0], name='Location 1', slug='location-1'),
+            Location.objects.create(site=sites[1], name='Location 2', slug='location-2'),
         )
 
         rack_roles = (
@@ -245,9 +390,9 @@ class RackTest(APIViewTestCases.APIViewTestCase):
         RackRole.objects.bulk_create(rack_roles)
 
         racks = (
-            Rack(site=sites[0], group=rack_groups[0], role=rack_roles[0], name='Rack 1'),
-            Rack(site=sites[0], group=rack_groups[0], role=rack_roles[0], name='Rack 2'),
-            Rack(site=sites[0], group=rack_groups[0], role=rack_roles[0], name='Rack 3'),
+            Rack(site=sites[0], location=locations[0], role=rack_roles[0], name='Rack 1'),
+            Rack(site=sites[0], location=locations[0], role=rack_roles[0], name='Rack 2'),
+            Rack(site=sites[0], location=locations[0], role=rack_roles[0], name='Rack 3'),
         )
         Rack.objects.bulk_create(racks)
 
@@ -255,19 +400,19 @@ class RackTest(APIViewTestCases.APIViewTestCase):
             {
                 'name': 'Test Rack 4',
                 'site': sites[1].pk,
-                'group': rack_groups[1].pk,
+                'location': locations[1].pk,
                 'role': rack_roles[1].pk,
             },
             {
                 'name': 'Test Rack 5',
                 'site': sites[1].pk,
-                'group': rack_groups[1].pk,
+                'location': locations[1].pk,
                 'role': rack_roles[1].pk,
             },
             {
                 'name': 'Test Rack 6',
                 'site': sites[1].pk,
-                'group': rack_groups[1].pk,
+                'location': locations[1].pk,
                 'role': rack_roles[1].pk,
             },
         ]
@@ -282,15 +427,15 @@ class RackTest(APIViewTestCases.APIViewTestCase):
 
         # Retrieve all units
         response = self.client.get(url, **self.header)
-        self.assertEqual(response.data['count'], 42)
+        self.assertEqual(response.data['count'], 84)
 
         # Search for specific units
         response = self.client.get(f'{url}?q=3', **self.header)
-        self.assertEqual(response.data['count'], 13)
+        self.assertEqual(response.data['count'], 26)
         response = self.client.get(f'{url}?q=U3', **self.header)
-        self.assertEqual(response.data['count'], 11)
+        self.assertEqual(response.data['count'], 22)
         response = self.client.get(f'{url}?q=U10', **self.header)
-        self.assertEqual(response.data['count'], 1)
+        self.assertEqual(response.data['count'], 2)
 
     def test_get_rack_elevation_svg(self):
         """
@@ -307,50 +452,47 @@ class RackTest(APIViewTestCases.APIViewTestCase):
 
 class RackReservationTest(APIViewTestCases.APIViewTestCase):
     model = RackReservation
-    brief_fields = ['id', 'units', 'url', 'user']
+    brief_fields = ['description', 'display', 'id', 'units', 'url', 'user']
     bulk_update_data = {
         'description': 'New description',
     }
+    user_permissions = ('dcim.view_rack', 'users.view_user')
 
     @classmethod
     def setUpTestData(cls):
         user = User.objects.create(username='user1', is_active=True)
         site = Site.objects.create(name='Test Site 1', slug='test-site-1')
 
-        cls.racks = (
+        racks = (
             Rack(site=site, name='Rack 1'),
             Rack(site=site, name='Rack 2'),
         )
-        Rack.objects.bulk_create(cls.racks)
+        Rack.objects.bulk_create(racks)
 
         rack_reservations = (
-            RackReservation(rack=cls.racks[0], units=[1, 2, 3], user=user, description='Reservation #1'),
-            RackReservation(rack=cls.racks[0], units=[4, 5, 6], user=user, description='Reservation #2'),
-            RackReservation(rack=cls.racks[0], units=[7, 8, 9], user=user, description='Reservation #3'),
+            RackReservation(rack=racks[0], units=[1, 2, 3], user=user, description='Reservation #1'),
+            RackReservation(rack=racks[0], units=[4, 5, 6], user=user, description='Reservation #2'),
+            RackReservation(rack=racks[0], units=[7, 8, 9], user=user, description='Reservation #3'),
         )
         RackReservation.objects.bulk_create(rack_reservations)
 
-    def setUp(self):
-        super().setUp()
-
-        # We have to set creation data under setUp() because we need access to the test user.
-        self.create_data = [
+        cls.create_data = [
             {
-                'rack': self.racks[1].pk,
+                'rack': racks[1].pk,
                 'units': [10, 11, 12],
-                'user': self.user.pk,
+                'user': user.pk,
                 'description': 'Reservation #4',
             },
             {
-                'rack': self.racks[1].pk,
+                'rack': racks[1].pk,
                 'units': [13, 14, 15],
-                'user': self.user.pk,
+                'user': user.pk,
                 'description': 'Reservation #5',
             },
             {
-                'rack': self.racks[1].pk,
+                'rack': racks[1].pk,
                 'units': [16, 17, 18],
-                'user': self.user.pk,
+                'user': user.pk,
                 'description': 'Reservation #6',
             },
         ]
@@ -358,7 +500,7 @@ class RackReservationTest(APIViewTestCases.APIViewTestCase):
 
 class ManufacturerTest(APIViewTestCases.APIViewTestCase):
     model = Manufacturer
-    brief_fields = ['devicetype_count', 'id', 'name', 'slug', 'url']
+    brief_fields = ['description', 'devicetype_count', 'display', 'id', 'name', 'slug', 'url']
     create_data = [
         {
             'name': 'Manufacturer 4',
@@ -390,10 +532,11 @@ class ManufacturerTest(APIViewTestCases.APIViewTestCase):
 
 class DeviceTypeTest(APIViewTestCases.APIViewTestCase):
     model = DeviceType
-    brief_fields = ['device_count', 'display_name', 'id', 'manufacturer', 'model', 'slug', 'url']
+    brief_fields = ['description', 'device_count', 'display', 'id', 'manufacturer', 'model', 'slug', 'url']
     bulk_update_data = {
         'part_number': 'ABC123',
     }
+    user_permissions = ('dcim.view_manufacturer', )
 
     @classmethod
     def setUpTestData(cls):
@@ -416,23 +559,66 @@ class DeviceTypeTest(APIViewTestCases.APIViewTestCase):
                 'manufacturer': manufacturers[1].pk,
                 'model': 'Device Type 4',
                 'slug': 'device-type-4',
+                'u_height': 0,
             },
             {
                 'manufacturer': manufacturers[1].pk,
                 'model': 'Device Type 5',
                 'slug': 'device-type-5',
+                'u_height': 0.5,
             },
             {
                 'manufacturer': manufacturers[1].pk,
                 'model': 'Device Type 6',
                 'slug': 'device-type-6',
+                'u_height': 1,
+            },
+        ]
+
+
+class ModuleTypeTest(APIViewTestCases.APIViewTestCase):
+    model = ModuleType
+    brief_fields = ['description', 'display', 'id', 'manufacturer', 'model', 'url']
+    bulk_update_data = {
+        'part_number': 'ABC123',
+    }
+    user_permissions = ('dcim.view_manufacturer', )
+
+    @classmethod
+    def setUpTestData(cls):
+
+        manufacturers = (
+            Manufacturer(name='Manufacturer 1', slug='manufacturer-1'),
+            Manufacturer(name='Manufacturer 2', slug='manufacturer-2'),
+        )
+        Manufacturer.objects.bulk_create(manufacturers)
+
+        module_types = (
+            ModuleType(manufacturer=manufacturers[0], model='Module Type 1'),
+            ModuleType(manufacturer=manufacturers[0], model='Module Type 2'),
+            ModuleType(manufacturer=manufacturers[0], model='Module Type 3'),
+        )
+        ModuleType.objects.bulk_create(module_types)
+
+        cls.create_data = [
+            {
+                'manufacturer': manufacturers[1].pk,
+                'model': 'Module Type 4',
+            },
+            {
+                'manufacturer': manufacturers[1].pk,
+                'model': 'Module Type 5',
+            },
+            {
+                'manufacturer': manufacturers[1].pk,
+                'model': 'Module Type 6',
             },
         ]
 
 
 class ConsolePortTemplateTest(APIViewTestCases.APIViewTestCase):
     model = ConsolePortTemplate
-    brief_fields = ['id', 'name', 'url']
+    brief_fields = ['description', 'display', 'id', 'name', 'url']
     bulk_update_data = {
         'description': 'New description',
     }
@@ -442,6 +628,9 @@ class ConsolePortTemplateTest(APIViewTestCases.APIViewTestCase):
         manufacturer = Manufacturer.objects.create(name='Test Manufacturer 1', slug='test-manufacturer-1')
         devicetype = DeviceType.objects.create(
             manufacturer=manufacturer, model='Device Type 1', slug='device-type-1'
+        )
+        moduletype = ModuleType.objects.create(
+            manufacturer=manufacturer, model='Module Type 1'
         )
 
         console_port_templates = (
@@ -461,15 +650,19 @@ class ConsolePortTemplateTest(APIViewTestCases.APIViewTestCase):
                 'name': 'Console Port Template 5',
             },
             {
-                'device_type': devicetype.pk,
+                'module_type': moduletype.pk,
                 'name': 'Console Port Template 6',
+            },
+            {
+                'module_type': moduletype.pk,
+                'name': 'Console Port Template 7',
             },
         ]
 
 
 class ConsoleServerPortTemplateTest(APIViewTestCases.APIViewTestCase):
     model = ConsoleServerPortTemplate
-    brief_fields = ['id', 'name', 'url']
+    brief_fields = ['description', 'display', 'id', 'name', 'url']
     bulk_update_data = {
         'description': 'New description',
     }
@@ -479,6 +672,9 @@ class ConsoleServerPortTemplateTest(APIViewTestCases.APIViewTestCase):
         manufacturer = Manufacturer.objects.create(name='Test Manufacturer 1', slug='test-manufacturer-1')
         devicetype = DeviceType.objects.create(
             manufacturer=manufacturer, model='Device Type 1', slug='device-type-1'
+        )
+        moduletype = ModuleType.objects.create(
+            manufacturer=manufacturer, model='Module Type 1'
         )
 
         console_server_port_templates = (
@@ -498,15 +694,19 @@ class ConsoleServerPortTemplateTest(APIViewTestCases.APIViewTestCase):
                 'name': 'Console Server Port Template 5',
             },
             {
-                'device_type': devicetype.pk,
+                'module_type': moduletype.pk,
                 'name': 'Console Server Port Template 6',
+            },
+            {
+                'module_type': moduletype.pk,
+                'name': 'Console Server Port Template 7',
             },
         ]
 
 
 class PowerPortTemplateTest(APIViewTestCases.APIViewTestCase):
     model = PowerPortTemplate
-    brief_fields = ['id', 'name', 'url']
+    brief_fields = ['description', 'display', 'id', 'name', 'url']
     bulk_update_data = {
         'description': 'New description',
     }
@@ -516,6 +716,9 @@ class PowerPortTemplateTest(APIViewTestCases.APIViewTestCase):
         manufacturer = Manufacturer.objects.create(name='Test Manufacturer 1', slug='test-manufacturer-1')
         devicetype = DeviceType.objects.create(
             manufacturer=manufacturer, model='Device Type 1', slug='device-type-1'
+        )
+        moduletype = ModuleType.objects.create(
+            manufacturer=manufacturer, model='Module Type 1'
         )
 
         power_port_templates = (
@@ -535,18 +738,23 @@ class PowerPortTemplateTest(APIViewTestCases.APIViewTestCase):
                 'name': 'Power Port Template 5',
             },
             {
-                'device_type': devicetype.pk,
+                'module_type': moduletype.pk,
                 'name': 'Power Port Template 6',
+            },
+            {
+                'module_type': moduletype.pk,
+                'name': 'Power Port Template 7',
             },
         ]
 
 
 class PowerOutletTemplateTest(APIViewTestCases.APIViewTestCase):
     model = PowerOutletTemplate
-    brief_fields = ['id', 'name', 'url']
+    brief_fields = ['description', 'display', 'id', 'name', 'url']
     bulk_update_data = {
         'description': 'New description',
     }
+    user_permissions = ('dcim.view_devicetype', )
 
     @classmethod
     def setUpTestData(cls):
@@ -554,6 +762,15 @@ class PowerOutletTemplateTest(APIViewTestCases.APIViewTestCase):
         devicetype = DeviceType.objects.create(
             manufacturer=manufacturer, model='Device Type 1', slug='device-type-1'
         )
+        moduletype = ModuleType.objects.create(
+            manufacturer=manufacturer, model='Module Type 1'
+        )
+
+        power_port_templates = (
+            PowerPortTemplate(device_type=devicetype, name='Power Port Template 1'),
+            PowerPortTemplate(device_type=devicetype, name='Power Port Template 2'),
+        )
+        PowerPortTemplate.objects.bulk_create(power_port_templates)
 
         power_outlet_templates = (
             PowerOutletTemplate(device_type=devicetype, name='Power Outlet Template 1'),
@@ -566,21 +783,32 @@ class PowerOutletTemplateTest(APIViewTestCases.APIViewTestCase):
             {
                 'device_type': devicetype.pk,
                 'name': 'Power Outlet Template 4',
+                'power_port': power_port_templates[0].pk,
             },
             {
                 'device_type': devicetype.pk,
                 'name': 'Power Outlet Template 5',
+                'power_port': power_port_templates[1].pk,
             },
             {
                 'device_type': devicetype.pk,
                 'name': 'Power Outlet Template 6',
+                'power_port': None,
+            },
+            {
+                'module_type': moduletype.pk,
+                'name': 'Power Outlet Template 7',
+            },
+            {
+                'module_type': moduletype.pk,
+                'name': 'Power Outlet Template 8',
             },
         ]
 
 
 class InterfaceTemplateTest(APIViewTestCases.APIViewTestCase):
     model = InterfaceTemplate
-    brief_fields = ['id', 'name', 'url']
+    brief_fields = ['description', 'display', 'id', 'name', 'url']
     bulk_update_data = {
         'description': 'New description',
     }
@@ -590,6 +818,9 @@ class InterfaceTemplateTest(APIViewTestCases.APIViewTestCase):
         manufacturer = Manufacturer.objects.create(name='Test Manufacturer 1', slug='test-manufacturer-1')
         devicetype = DeviceType.objects.create(
             manufacturer=manufacturer, model='Device Type 1', slug='device-type-1'
+        )
+        moduletype = ModuleType.objects.create(
+            manufacturer=manufacturer, model='Module Type 1'
         )
 
         interface_templates = (
@@ -611,8 +842,13 @@ class InterfaceTemplateTest(APIViewTestCases.APIViewTestCase):
                 'type': '1000base-t',
             },
             {
-                'device_type': devicetype.pk,
+                'module_type': moduletype.pk,
                 'name': 'Interface Template 6',
+                'type': '1000base-t',
+            },
+            {
+                'module_type': moduletype.pk,
+                'name': 'Interface Template 7',
                 'type': '1000base-t',
             },
         ]
@@ -620,10 +856,11 @@ class InterfaceTemplateTest(APIViewTestCases.APIViewTestCase):
 
 class FrontPortTemplateTest(APIViewTestCases.APIViewTestCase):
     model = FrontPortTemplate
-    brief_fields = ['id', 'name', 'url']
+    brief_fields = ['description', 'display', 'id', 'name', 'url']
     bulk_update_data = {
         'description': 'New description',
     }
+    user_permissions = ('dcim.view_rearporttemplate', )
 
     @classmethod
     def setUpTestData(cls):
@@ -631,14 +868,19 @@ class FrontPortTemplateTest(APIViewTestCases.APIViewTestCase):
         devicetype = DeviceType.objects.create(
             manufacturer=manufacturer, model='Device Type 1', slug='device-type-1'
         )
+        moduletype = ModuleType.objects.create(
+            manufacturer=manufacturer, model='Module Type 1'
+        )
 
         rear_port_templates = (
             RearPortTemplate(device_type=devicetype, name='Rear Port Template 1', type=PortTypeChoices.TYPE_8P8C),
             RearPortTemplate(device_type=devicetype, name='Rear Port Template 2', type=PortTypeChoices.TYPE_8P8C),
             RearPortTemplate(device_type=devicetype, name='Rear Port Template 3', type=PortTypeChoices.TYPE_8P8C),
             RearPortTemplate(device_type=devicetype, name='Rear Port Template 4', type=PortTypeChoices.TYPE_8P8C),
-            RearPortTemplate(device_type=devicetype, name='Rear Port Template 5', type=PortTypeChoices.TYPE_8P8C),
-            RearPortTemplate(device_type=devicetype, name='Rear Port Template 6', type=PortTypeChoices.TYPE_8P8C),
+            RearPortTemplate(module_type=moduletype, name='Rear Port Template 5', type=PortTypeChoices.TYPE_8P8C),
+            RearPortTemplate(module_type=moduletype, name='Rear Port Template 6', type=PortTypeChoices.TYPE_8P8C),
+            RearPortTemplate(module_type=moduletype, name='Rear Port Template 7', type=PortTypeChoices.TYPE_8P8C),
+            RearPortTemplate(module_type=moduletype, name='Rear Port Template 8', type=PortTypeChoices.TYPE_8P8C),
         )
         RearPortTemplate.objects.bulk_create(rear_port_templates)
 
@@ -656,15 +898,28 @@ class FrontPortTemplateTest(APIViewTestCases.APIViewTestCase):
                 rear_port=rear_port_templates[1]
             ),
             FrontPortTemplate(
-                device_type=devicetype,
-                name='Front Port Template 3',
+                module_type=moduletype,
+                name='Front Port Template 5',
                 type=PortTypeChoices.TYPE_8P8C,
-                rear_port=rear_port_templates[2]
+                rear_port=rear_port_templates[4]
+            ),
+            FrontPortTemplate(
+                module_type=moduletype,
+                name='Front Port Template 6',
+                type=PortTypeChoices.TYPE_8P8C,
+                rear_port=rear_port_templates[5]
             ),
         )
         FrontPortTemplate.objects.bulk_create(front_port_templates)
 
         cls.create_data = [
+            {
+                'device_type': devicetype.pk,
+                'name': 'Front Port Template 3',
+                'type': PortTypeChoices.TYPE_8P8C,
+                'rear_port': rear_port_templates[2].pk,
+                'rear_port_position': 1,
+            },
             {
                 'device_type': devicetype.pk,
                 'name': 'Front Port Template 4',
@@ -673,17 +928,17 @@ class FrontPortTemplateTest(APIViewTestCases.APIViewTestCase):
                 'rear_port_position': 1,
             },
             {
-                'device_type': devicetype.pk,
-                'name': 'Front Port Template 5',
+                'module_type': moduletype.pk,
+                'name': 'Front Port Template 7',
                 'type': PortTypeChoices.TYPE_8P8C,
-                'rear_port': rear_port_templates[4].pk,
+                'rear_port': rear_port_templates[6].pk,
                 'rear_port_position': 1,
             },
             {
-                'device_type': devicetype.pk,
-                'name': 'Front Port Template 6',
+                'module_type': moduletype.pk,
+                'name': 'Front Port Template 8',
                 'type': PortTypeChoices.TYPE_8P8C,
-                'rear_port': rear_port_templates[5].pk,
+                'rear_port': rear_port_templates[7].pk,
                 'rear_port_position': 1,
             },
         ]
@@ -691,7 +946,7 @@ class FrontPortTemplateTest(APIViewTestCases.APIViewTestCase):
 
 class RearPortTemplateTest(APIViewTestCases.APIViewTestCase):
     model = RearPortTemplate
-    brief_fields = ['id', 'name', 'url']
+    brief_fields = ['description', 'display', 'id', 'name', 'url']
     bulk_update_data = {
         'description': 'New description',
     }
@@ -701,6 +956,9 @@ class RearPortTemplateTest(APIViewTestCases.APIViewTestCase):
         manufacturer = Manufacturer.objects.create(name='Test Manufacturer 1', slug='test-manufacturer-1')
         devicetype = DeviceType.objects.create(
             manufacturer=manufacturer, model='Device Type 1', slug='device-type-1'
+        )
+        moduletype = ModuleType.objects.create(
+            manufacturer=manufacturer, model='Module Type 1'
         )
 
         rear_port_templates = (
@@ -722,19 +980,66 @@ class RearPortTemplateTest(APIViewTestCases.APIViewTestCase):
                 'type': PortTypeChoices.TYPE_8P8C,
             },
             {
-                'device_type': devicetype.pk,
+                'module_type': moduletype.pk,
                 'name': 'Rear Port Template 6',
                 'type': PortTypeChoices.TYPE_8P8C,
+            },
+            {
+                'module_type': moduletype.pk,
+                'name': 'Rear Port Template 7',
+                'type': PortTypeChoices.TYPE_8P8C,
+            },
+        ]
+
+
+class ModuleBayTemplateTest(APIViewTestCases.APIViewTestCase):
+    model = ModuleBayTemplate
+    brief_fields = ['description', 'display', 'id', 'name', 'url']
+    bulk_update_data = {
+        'description': 'New description',
+    }
+    user_permissions = ('dcim.view_devicetype', )
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer = Manufacturer.objects.create(name='Test Manufacturer 1', slug='test-manufacturer-1')
+        devicetype = DeviceType.objects.create(
+            manufacturer=manufacturer,
+            model='Device Type 1',
+            slug='device-type-1',
+            subdevice_role=SubdeviceRoleChoices.ROLE_PARENT
+        )
+
+        module_bay_templates = (
+            ModuleBayTemplate(device_type=devicetype, name='Module Bay Template 1'),
+            ModuleBayTemplate(device_type=devicetype, name='Module Bay Template 2'),
+            ModuleBayTemplate(device_type=devicetype, name='Module Bay Template 3'),
+        )
+        ModuleBayTemplate.objects.bulk_create(module_bay_templates)
+
+        cls.create_data = [
+            {
+                'device_type': devicetype.pk,
+                'name': 'Module Bay Template 4',
+            },
+            {
+                'device_type': devicetype.pk,
+                'name': 'Module Bay Template 5',
+            },
+            {
+                'device_type': devicetype.pk,
+                'name': 'Module Bay Template 6',
             },
         ]
 
 
 class DeviceBayTemplateTest(APIViewTestCases.APIViewTestCase):
     model = DeviceBayTemplate
-    brief_fields = ['id', 'name', 'url']
+    brief_fields = ['description', 'display', 'id', 'name', 'url']
     bulk_update_data = {
         'description': 'New description',
     }
+    user_permissions = ('dcim.view_devicetype', )
 
     @classmethod
     def setUpTestData(cls):
@@ -769,9 +1074,69 @@ class DeviceBayTemplateTest(APIViewTestCases.APIViewTestCase):
         ]
 
 
+class InventoryItemTemplateTest(APIViewTestCases.APIViewTestCase):
+    model = InventoryItemTemplate
+    brief_fields = ['_depth', 'description', 'display', 'id', 'name', 'url']
+    bulk_update_data = {
+        'description': 'New description',
+    }
+    user_permissions = ('dcim.view_devicetype', 'dcim.view_manufacturer',)
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer = Manufacturer.objects.create(name='Test Manufacturer 1', slug='test-manufacturer-1')
+        devicetype = DeviceType.objects.create(
+            manufacturer=manufacturer,
+            model='Device Type 1',
+            slug='device-type-1'
+        )
+        role = InventoryItemRole.objects.create(name='Inventory Item Role 1', slug='inventory-item-role-1')
+
+        inventory_item_templates = (
+            InventoryItemTemplate(
+                device_type=devicetype, name='Inventory Item Template 1', manufacturer=manufacturer, role=role
+            ),
+            InventoryItemTemplate(
+                device_type=devicetype, name='Inventory Item Template 2', manufacturer=manufacturer, role=role
+            ),
+            InventoryItemTemplate(
+                device_type=devicetype, name='Inventory Item Template 3', manufacturer=manufacturer, role=role
+            ),
+            InventoryItemTemplate(
+                device_type=devicetype, name='Inventory Item Template 4', manufacturer=manufacturer, role=role
+            ),
+        )
+        for item in inventory_item_templates:
+            item.save()
+
+        cls.create_data = [
+            {
+                'device_type': devicetype.pk,
+                'name': 'Inventory Item Template 5',
+                'manufacturer': manufacturer.pk,
+                'role': role.pk,
+                'parent': inventory_item_templates[3].pk,
+            },
+            {
+                'device_type': devicetype.pk,
+                'name': 'Inventory Item Template 6',
+                'manufacturer': manufacturer.pk,
+                'role': role.pk,
+                'parent': inventory_item_templates[3].pk,
+            },
+            {
+                'device_type': devicetype.pk,
+                'name': 'Inventory Item Template 7',
+                'manufacturer': manufacturer.pk,
+                'role': role.pk,
+                'parent': inventory_item_templates[3].pk,
+            },
+        ]
+
+
 class DeviceRoleTest(APIViewTestCases.APIViewTestCase):
     model = DeviceRole
-    brief_fields = ['device_count', 'id', 'name', 'slug', 'url', 'virtualmachine_count']
+    brief_fields = ['description', 'device_count', 'display', 'id', 'name', 'slug', 'url', 'virtualmachine_count']
     create_data = [
         {
             'name': 'Device Role 4',
@@ -796,17 +1161,17 @@ class DeviceRoleTest(APIViewTestCases.APIViewTestCase):
     @classmethod
     def setUpTestData(cls):
 
-        device_roles = (
+        roles = (
             DeviceRole(name='Device Role 1', slug='device-role-1', color='ff0000'),
             DeviceRole(name='Device Role 2', slug='device-role-2', color='00ff00'),
             DeviceRole(name='Device Role 3', slug='device-role-3', color='0000ff'),
         )
-        DeviceRole.objects.bulk_create(device_roles)
+        DeviceRole.objects.bulk_create(roles)
 
 
 class PlatformTest(APIViewTestCases.APIViewTestCase):
     model = Platform
-    brief_fields = ['device_count', 'id', 'name', 'slug', 'url', 'virtualmachine_count']
+    brief_fields = ['description', 'device_count', 'display', 'id', 'name', 'slug', 'url', 'virtualmachine_count']
     create_data = [
         {
             'name': 'Platform 4',
@@ -838,10 +1203,14 @@ class PlatformTest(APIViewTestCases.APIViewTestCase):
 
 class DeviceTest(APIViewTestCases.APIViewTestCase):
     model = Device
-    brief_fields = ['display_name', 'id', 'name', 'url']
+    brief_fields = ['description', 'display', 'id', 'name', 'url']
     bulk_update_data = {
         'status': 'failed',
     }
+    user_permissions = (
+        'dcim.view_site', 'dcim.view_rack', 'dcim.view_location', 'dcim.view_devicerole', 'dcim.view_devicetype',
+        'extras.view_configtemplate',
+    )
 
     @classmethod
     def setUpTestData(cls):
@@ -862,15 +1231,15 @@ class DeviceTest(APIViewTestCases.APIViewTestCase):
 
         device_types = (
             DeviceType(manufacturer=manufacturer, model='Device Type 1', slug='device-type-1'),
-            DeviceType(manufacturer=manufacturer, model='Device Type 2', slug='device-type-2'),
+            DeviceType(manufacturer=manufacturer, model='Device Type 2', slug='device-type-2', u_height=2),
         )
         DeviceType.objects.bulk_create(device_types)
 
-        device_roles = (
+        roles = (
             DeviceRole(name='Device Role 1', slug='device-role-1', color='ff0000'),
             DeviceRole(name='Device Role 2', slug='device-role-2', color='00ff00'),
         )
-        DeviceRole.objects.bulk_create(device_roles)
+        DeviceRole.objects.bulk_create(roles)
 
         cluster_type = ClusterType.objects.create(name='Cluster Type 1', slug='cluster-type-1')
 
@@ -883,7 +1252,7 @@ class DeviceTest(APIViewTestCases.APIViewTestCase):
         devices = (
             Device(
                 device_type=device_types[0],
-                device_role=device_roles[0],
+                role=roles[0],
                 name='Device 1',
                 site=sites[0],
                 rack=racks[0],
@@ -892,7 +1261,7 @@ class DeviceTest(APIViewTestCases.APIViewTestCase):
             ),
             Device(
                 device_type=device_types[0],
-                device_role=device_roles[0],
+                role=roles[0],
                 name='Device 2',
                 site=sites[0],
                 rack=racks[0],
@@ -901,7 +1270,7 @@ class DeviceTest(APIViewTestCases.APIViewTestCase):
             ),
             Device(
                 device_type=device_types[0],
-                device_role=device_roles[0],
+                role=roles[0],
                 name='Device 3',
                 site=sites[0],
                 rack=racks[0],
@@ -914,7 +1283,7 @@ class DeviceTest(APIViewTestCases.APIViewTestCase):
         cls.create_data = [
             {
                 'device_type': device_types[1].pk,
-                'device_role': device_roles[1].pk,
+                'role': roles[1].pk,
                 'name': 'Test Device 4',
                 'site': sites[1].pk,
                 'rack': racks[1].pk,
@@ -922,7 +1291,7 @@ class DeviceTest(APIViewTestCases.APIViewTestCase):
             },
             {
                 'device_type': device_types[1].pk,
-                'device_role': device_roles[1].pk,
+                'role': roles[1].pk,
                 'name': 'Test Device 5',
                 'site': sites[1].pk,
                 'rack': racks[1].pk,
@@ -930,7 +1299,7 @@ class DeviceTest(APIViewTestCases.APIViewTestCase):
             },
             {
                 'device_type': device_types[1].pk,
-                'device_role': device_roles[1].pk,
+                'role': roles[1].pk,
                 'name': 'Test Device 6',
                 'site': sites[1].pk,
                 'rack': racks[1].pk,
@@ -965,7 +1334,7 @@ class DeviceTest(APIViewTestCases.APIViewTestCase):
         device = Device.objects.first()
         data = {
             'device_type': device.device_type.pk,
-            'device_role': device.device_role.pk,
+            'role': device.role.pk,
             'site': device.site.pk,
             'name': device.name,
         }
@@ -976,22 +1345,138 @@ class DeviceTest(APIViewTestCases.APIViewTestCase):
 
         self.assertHttpStatus(response, status.HTTP_400_BAD_REQUEST)
 
+    def test_rack_fit(self):
+        """
+        Check that creating multiple devices with overlapping position fails.
+        """
+        device = Device.objects.first()
+        device_type = DeviceType.objects.all()[1]
+        data = [
+            {
+                'device_type': device_type.pk,
+                'role': device.role.pk,
+                'site': device.site.pk,
+                'name': 'Test Device 7',
+                'rack': device.rack.pk,
+                'face': 'front',
+                'position': 1
+            },
+            {
+                'device_type': device_type.pk,
+                'role': device.role.pk,
+                'site': device.site.pk,
+                'name': 'Test Device 8',
+                'rack': device.rack.pk,
+                'face': 'front',
+                'position': 2
+            }
+        ]
+
+        self.add_permissions('dcim.add_device')
+        url = reverse('dcim-api:device-list')
+        response = self.client.post(url, data, format='json', **self.header)
+
+        self.assertHttpStatus(response, status.HTTP_400_BAD_REQUEST)
+
+    def test_render_config(self):
+        configtemplate = ConfigTemplate.objects.create(
+            name='Config Template 1',
+            template_code='Config for device {{ device.name }}'
+        )
+
+        device = Device.objects.first()
+        device.config_template = configtemplate
+        device.save()
+
+        self.add_permissions('dcim.add_device')
+        url = reverse('dcim-api:device-detail', kwargs={'pk': device.pk}) + 'render-config/'
+        response = self.client.post(url, {}, format='json', **self.header)
+        self.assertHttpStatus(response, status.HTTP_200_OK)
+        self.assertEqual(response.data['content'], f'Config for device {device.name}')
+
+
+class ModuleTest(APIViewTestCases.APIViewTestCase):
+    model = Module
+    brief_fields = ['description', 'device', 'display', 'id', 'module_bay', 'module_type', 'url']
+    bulk_update_data = {
+        'serial': '1234ABCD',
+    }
+    user_permissions = ('dcim.view_modulebay', 'dcim.view_moduletype', 'dcim.view_device')
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer = Manufacturer.objects.create(name='Generic', slug='generic')
+        device = create_test_device('Test Device 1')
+
+        module_types = (
+            ModuleType(manufacturer=manufacturer, model='Module Type 1'),
+            ModuleType(manufacturer=manufacturer, model='Module Type 2'),
+            ModuleType(manufacturer=manufacturer, model='Module Type 3'),
+        )
+        ModuleType.objects.bulk_create(module_types)
+
+        module_bays = (
+            ModuleBay(device=device, name='Module Bay 1'),
+            ModuleBay(device=device, name='Module Bay 2'),
+            ModuleBay(device=device, name='Module Bay 3'),
+            ModuleBay(device=device, name='Module Bay 4'),
+            ModuleBay(device=device, name='Module Bay 5'),
+            ModuleBay(device=device, name='Module Bay 6'),
+        )
+        for module_bay in module_bays:
+            module_bay.save()
+
+        modules = (
+            Module(device=device, module_bay=module_bays[0], module_type=module_types[0]),
+            Module(device=device, module_bay=module_bays[1], module_type=module_types[1]),
+            Module(device=device, module_bay=module_bays[2], module_type=module_types[2]),
+        )
+        Module.objects.bulk_create(modules)
+
+        cls.create_data = [
+            {
+                'device': device.pk,
+                'module_bay': module_bays[3].pk,
+                'module_type': module_types[0].pk,
+                'status': ModuleStatusChoices.STATUS_ACTIVE,
+                'serial': 'ABC123',
+                'asset_tag': 'Foo1',
+            },
+            {
+                'device': device.pk,
+                'module_bay': module_bays[4].pk,
+                'module_type': module_types[1].pk,
+                'status': ModuleStatusChoices.STATUS_ACTIVE,
+                'serial': 'DEF456',
+                'asset_tag': 'Foo2',
+            },
+            {
+                'device': device.pk,
+                'module_bay': module_bays[5].pk,
+                'module_type': module_types[2].pk,
+                'status': ModuleStatusChoices.STATUS_ACTIVE,
+                'serial': 'GHI789',
+                'asset_tag': 'Foo3',
+            },
+        ]
+
 
 class ConsolePortTest(Mixins.ComponentTraceMixin, APIViewTestCases.APIViewTestCase):
     model = ConsolePort
-    brief_fields = ['cable', 'device', 'id', 'name', 'url']
+    brief_fields = ['_occupied', 'cable', 'description', 'device', 'display', 'id', 'name', 'url']
     bulk_update_data = {
         'description': 'New description',
     }
     peer_termination_type = ConsoleServerPort
+    user_permissions = ('dcim.view_device', )
 
     @classmethod
     def setUpTestData(cls):
         manufacturer = Manufacturer.objects.create(name='Test Manufacturer 1', slug='test-manufacturer-1')
         devicetype = DeviceType.objects.create(manufacturer=manufacturer, model='Device Type 1', slug='device-type-1')
         site = Site.objects.create(name='Site 1', slug='site-1')
-        devicerole = DeviceRole.objects.create(name='Test Device Role 1', slug='test-device-role-1', color='ff0000')
-        device = Device.objects.create(device_type=devicetype, device_role=devicerole, name='Device 1', site=site)
+        role = DeviceRole.objects.create(name='Test Device Role 1', slug='test-device-role-1', color='ff0000')
+        device = Device.objects.create(device_type=devicetype, role=role, name='Device 1', site=site)
 
         console_ports = (
             ConsolePort(device=device, name='Console Port 1'),
@@ -1004,33 +1489,37 @@ class ConsolePortTest(Mixins.ComponentTraceMixin, APIViewTestCases.APIViewTestCa
             {
                 'device': device.pk,
                 'name': 'Console Port 4',
+                'speed': 9600,
             },
             {
                 'device': device.pk,
                 'name': 'Console Port 5',
+                'speed': 115200,
             },
             {
                 'device': device.pk,
                 'name': 'Console Port 6',
+                'speed': None,
             },
         ]
 
 
 class ConsoleServerPortTest(Mixins.ComponentTraceMixin, APIViewTestCases.APIViewTestCase):
     model = ConsoleServerPort
-    brief_fields = ['cable', 'device', 'id', 'name', 'url']
+    brief_fields = ['_occupied', 'cable', 'description', 'device', 'display', 'id', 'name', 'url']
     bulk_update_data = {
         'description': 'New description',
     }
     peer_termination_type = ConsolePort
+    user_permissions = ('dcim.view_device', )
 
     @classmethod
     def setUpTestData(cls):
         manufacturer = Manufacturer.objects.create(name='Test Manufacturer 1', slug='test-manufacturer-1')
         devicetype = DeviceType.objects.create(manufacturer=manufacturer, model='Device Type 1', slug='device-type-1')
         site = Site.objects.create(name='Site 1', slug='site-1')
-        devicerole = DeviceRole.objects.create(name='Test Device Role 1', slug='test-device-role-1', color='ff0000')
-        device = Device.objects.create(device_type=devicetype, device_role=devicerole, name='Device 1', site=site)
+        role = DeviceRole.objects.create(name='Test Device Role 1', slug='test-device-role-1', color='ff0000')
+        device = Device.objects.create(device_type=devicetype, role=role, name='Device 1', site=site)
 
         console_server_ports = (
             ConsoleServerPort(device=device, name='Console Server Port 1'),
@@ -1043,33 +1532,37 @@ class ConsoleServerPortTest(Mixins.ComponentTraceMixin, APIViewTestCases.APIView
             {
                 'device': device.pk,
                 'name': 'Console Server Port 4',
+                'speed': 9600,
             },
             {
                 'device': device.pk,
                 'name': 'Console Server Port 5',
+                'speed': 115200,
             },
             {
                 'device': device.pk,
                 'name': 'Console Server Port 6',
+                'speed': None,
             },
         ]
 
 
 class PowerPortTest(Mixins.ComponentTraceMixin, APIViewTestCases.APIViewTestCase):
     model = PowerPort
-    brief_fields = ['cable', 'device', 'id', 'name', 'url']
+    brief_fields = ['_occupied', 'cable', 'description', 'device', 'display', 'id', 'name', 'url']
     bulk_update_data = {
         'description': 'New description',
     }
     peer_termination_type = PowerOutlet
+    user_permissions = ('dcim.view_device', )
 
     @classmethod
     def setUpTestData(cls):
         manufacturer = Manufacturer.objects.create(name='Test Manufacturer 1', slug='test-manufacturer-1')
         devicetype = DeviceType.objects.create(manufacturer=manufacturer, model='Device Type 1', slug='device-type-1')
         site = Site.objects.create(name='Site 1', slug='site-1')
-        devicerole = DeviceRole.objects.create(name='Test Device Role 1', slug='test-device-role-1', color='ff0000')
-        device = Device.objects.create(device_type=devicetype, device_role=devicerole, name='Device 1', site=site)
+        role = DeviceRole.objects.create(name='Test Device Role 1', slug='test-device-role-1', color='ff0000')
+        device = Device.objects.create(device_type=devicetype, role=role, name='Device 1', site=site)
 
         power_ports = (
             PowerPort(device=device, name='Power Port 1'),
@@ -1096,19 +1589,26 @@ class PowerPortTest(Mixins.ComponentTraceMixin, APIViewTestCases.APIViewTestCase
 
 class PowerOutletTest(Mixins.ComponentTraceMixin, APIViewTestCases.APIViewTestCase):
     model = PowerOutlet
-    brief_fields = ['cable', 'device', 'id', 'name', 'url']
+    brief_fields = ['_occupied', 'cable', 'description', 'device', 'display', 'id', 'name', 'url']
     bulk_update_data = {
         'description': 'New description',
     }
     peer_termination_type = PowerPort
+    user_permissions = ('dcim.view_device', )
 
     @classmethod
     def setUpTestData(cls):
         manufacturer = Manufacturer.objects.create(name='Test Manufacturer 1', slug='test-manufacturer-1')
         devicetype = DeviceType.objects.create(manufacturer=manufacturer, model='Device Type 1', slug='device-type-1')
         site = Site.objects.create(name='Site 1', slug='site-1')
-        devicerole = DeviceRole.objects.create(name='Test Device Role 1', slug='test-device-role-1', color='ff0000')
-        device = Device.objects.create(device_type=devicetype, device_role=devicerole, name='Device 1', site=site)
+        role = DeviceRole.objects.create(name='Test Device Role 1', slug='test-device-role-1', color='ff0000')
+        device = Device.objects.create(device_type=devicetype, role=role, name='Device 1', site=site)
+
+        power_ports = (
+            PowerPort(device=device, name='Power Port 1'),
+            PowerPort(device=device, name='Power Port 2'),
+        )
+        PowerPort.objects.bulk_create(power_ports)
 
         power_outlets = (
             PowerOutlet(device=device, name='Power Outlet 1'),
@@ -1121,33 +1621,37 @@ class PowerOutletTest(Mixins.ComponentTraceMixin, APIViewTestCases.APIViewTestCa
             {
                 'device': device.pk,
                 'name': 'Power Outlet 4',
+                'power_port': power_ports[0].pk,
             },
             {
                 'device': device.pk,
                 'name': 'Power Outlet 5',
+                'power_port': power_ports[1].pk,
             },
             {
                 'device': device.pk,
                 'name': 'Power Outlet 6',
+                'power_port': None,
             },
         ]
 
 
 class InterfaceTest(Mixins.ComponentTraceMixin, APIViewTestCases.APIViewTestCase):
     model = Interface
-    brief_fields = ['cable', 'device', 'id', 'name', 'url']
+    brief_fields = ['_occupied', 'cable', 'description', 'device', 'display', 'id', 'name', 'url']
     bulk_update_data = {
         'description': 'New description',
     }
     peer_termination_type = Interface
+    user_permissions = ('dcim.view_device', )
 
     @classmethod
     def setUpTestData(cls):
         manufacturer = Manufacturer.objects.create(name='Test Manufacturer 1', slug='test-manufacturer-1')
         devicetype = DeviceType.objects.create(manufacturer=manufacturer, model='Device Type 1', slug='device-type-1')
         site = Site.objects.create(name='Site 1', slug='site-1')
-        devicerole = DeviceRole.objects.create(name='Test Device Role 1', slug='test-device-role-1', color='ff0000')
-        device = Device.objects.create(device_type=devicetype, device_role=devicerole, name='Device 1', site=site)
+        role = DeviceRole.objects.create(name='Test Device Role 1', slug='test-device-role-1', color='ff0000')
+        device = Device.objects.create(device_type=devicetype, role=role, name='Device 1', site=site)
 
         interfaces = (
             Interface(device=device, name='Interface 1', type='1000base-t'),
@@ -1156,12 +1660,32 @@ class InterfaceTest(Mixins.ComponentTraceMixin, APIViewTestCases.APIViewTestCase
         )
         Interface.objects.bulk_create(interfaces)
 
+        vdcs = (
+            VirtualDeviceContext(name='VDC 1', identifier=1, device=device),
+            VirtualDeviceContext(name='VDC 2', identifier=2, device=device)
+        )
+        VirtualDeviceContext.objects.bulk_create(vdcs)
+
         vlans = (
             VLAN(name='VLAN 1', vid=1),
             VLAN(name='VLAN 2', vid=2),
             VLAN(name='VLAN 3', vid=3),
+            VLAN(name='SVLAN 1', vid=1001, qinq_role=VLANQinQRoleChoices.ROLE_SERVICE),
         )
         VLAN.objects.bulk_create(vlans)
+
+        wireless_lans = (
+            WirelessLAN(ssid='WLAN1'),
+            WirelessLAN(ssid='WLAN2'),
+        )
+        WirelessLAN.objects.bulk_create(wireless_lans)
+
+        vrfs = (
+            VRF(name='VRF 1'),
+            VRF(name='VRF 2'),
+            VRF(name='VRF 3'),
+        )
+        VRF.objects.bulk_create(vrfs)
 
         cls.create_data = [
             {
@@ -1169,6 +1693,11 @@ class InterfaceTest(Mixins.ComponentTraceMixin, APIViewTestCases.APIViewTestCase
                 'name': 'Interface 4',
                 'type': '1000base-t',
                 'mode': InterfaceModeChoices.MODE_TAGGED,
+                'speed': 1000000,
+                'duplex': 'full',
+                'vrf': vrfs[0].pk,
+                'poe_mode': InterfacePoEModeChoices.MODE_PD,
+                'poe_type': InterfacePoETypeChoices.TYPE_1_8023AF,
                 'tagged_vlans': [vlans[0].pk, vlans[1].pk],
                 'untagged_vlan': vlans[2].pk,
             },
@@ -1177,35 +1706,92 @@ class InterfaceTest(Mixins.ComponentTraceMixin, APIViewTestCases.APIViewTestCase
                 'name': 'Interface 5',
                 'type': '1000base-t',
                 'mode': InterfaceModeChoices.MODE_TAGGED,
+                'bridge': interfaces[0].pk,
+                'speed': 100000,
+                'duplex': 'half',
+                'vrf': vrfs[1].pk,
                 'tagged_vlans': [vlans[0].pk, vlans[1].pk],
                 'untagged_vlan': vlans[2].pk,
             },
             {
                 'device': device.pk,
+                'vdcs': [vdcs[0].pk],
                 'name': 'Interface 6',
-                'type': '1000base-t',
+                'type': 'virtual',
                 'mode': InterfaceModeChoices.MODE_TAGGED,
+                'parent': interfaces[1].pk,
+                'vrf': vrfs[2].pk,
                 'tagged_vlans': [vlans[0].pk, vlans[1].pk],
                 'untagged_vlan': vlans[2].pk,
             },
+            {
+                'device': device.pk,
+                'vdcs': [vdcs[1].pk],
+                'name': 'Interface 7',
+                'type': InterfaceTypeChoices.TYPE_80211A,
+                'mode': InterfaceModeChoices.MODE_Q_IN_Q,
+                'tx_power': 10,
+                'wireless_lans': [wireless_lans[0].pk, wireless_lans[1].pk],
+                'rf_channel': WirelessChannelChoices.CHANNEL_5G_32,
+                'qinq_svlan': vlans[3].pk,
+            },
+            {
+                'device': device.pk,
+                'vdcs': [vdcs[1].pk],
+                'name': 'Interface 8',
+                'type': InterfaceTypeChoices.TYPE_80211A,
+                'mode': InterfaceModeChoices.MODE_Q_IN_Q,
+                'tx_power': 10,
+                'wireless_lans': [wireless_lans[0].pk, wireless_lans[1].pk],
+                'rf_channel': "",
+                'qinq_svlan': vlans[3].pk,
+            },
         ]
+
+    def test_bulk_delete_child_interfaces(self):
+        interface1 = Interface.objects.get(name='Interface 1')
+        device = interface1.device
+        self.add_permissions('dcim.delete_interface')
+
+        # Create a child interface
+        child = Interface.objects.create(
+            device=device,
+            name='Interface 1A',
+            type=InterfaceTypeChoices.TYPE_VIRTUAL,
+            parent=interface1
+        )
+        self.assertEqual(device.interfaces.count(), 4)
+
+        # Attempt to delete only the parent interface
+        url = self._get_detail_url(interface1)
+        self.client.delete(url, **self.header)
+        self.assertEqual(device.interfaces.count(), 4)  # Parent was not deleted
+
+        # Attempt to bulk delete parent & child together
+        data = [
+            {"id": interface1.pk},
+            {"id": child.pk},
+        ]
+        self.client.delete(self._get_list_url(), data, format='json', **self.header)
+        self.assertEqual(device.interfaces.count(), 2)  # Child & parent were both deleted
 
 
 class FrontPortTest(APIViewTestCases.APIViewTestCase):
     model = FrontPort
-    brief_fields = ['cable', 'device', 'id', 'name', 'url']
+    brief_fields = ['_occupied', 'cable', 'description', 'device', 'display', 'id', 'name', 'url']
     bulk_update_data = {
         'description': 'New description',
     }
     peer_termination_type = Interface
+    user_permissions = ('dcim.view_device', 'dcim.view_rearport')
 
     @classmethod
     def setUpTestData(cls):
         manufacturer = Manufacturer.objects.create(name='Test Manufacturer 1', slug='test-manufacturer-1')
         devicetype = DeviceType.objects.create(manufacturer=manufacturer, model='Device Type 1', slug='device-type-1')
         site = Site.objects.create(name='Site 1', slug='site-1')
-        devicerole = DeviceRole.objects.create(name='Test Device Role 1', slug='test-device-role-1', color='ff0000')
-        device = Device.objects.create(device_type=devicetype, device_role=devicerole, name='Device 1', site=site)
+        role = DeviceRole.objects.create(name='Test Device Role 1', slug='test-device-role-1', color='ff0000')
+        device = Device.objects.create(device_type=devicetype, role=role, name='Device 1', site=site)
 
         rear_ports = (
             RearPort(device=device, name='Rear Port 1', type=PortTypeChoices.TYPE_8P8C),
@@ -1251,19 +1837,20 @@ class FrontPortTest(APIViewTestCases.APIViewTestCase):
 
 class RearPortTest(APIViewTestCases.APIViewTestCase):
     model = RearPort
-    brief_fields = ['cable', 'device', 'id', 'name', 'url']
+    brief_fields = ['_occupied', 'cable', 'description', 'device', 'display', 'id', 'name', 'url']
     bulk_update_data = {
         'description': 'New description',
     }
     peer_termination_type = Interface
+    user_permissions = ('dcim.view_device', )
 
     @classmethod
     def setUpTestData(cls):
         manufacturer = Manufacturer.objects.create(name='Test Manufacturer 1', slug='test-manufacturer-1')
         devicetype = DeviceType.objects.create(manufacturer=manufacturer, model='Device Type 1', slug='device-type-1')
         site = Site.objects.create(name='Site 1', slug='site-1')
-        devicerole = DeviceRole.objects.create(name='Test Device Role 1', slug='test-device-role-1', color='ff0000')
-        device = Device.objects.create(device_type=devicetype, device_role=devicerole, name='Device 1', site=site)
+        role = DeviceRole.objects.create(name='Test Device Role 1', slug='test-device-role-1', color='ff0000')
+        device = Device.objects.create(device_type=devicetype, role=role, name='Device 1', site=site)
 
         rear_ports = (
             RearPort(device=device, name='Rear Port 1', type=PortTypeChoices.TYPE_8P8C),
@@ -1291,18 +1878,60 @@ class RearPortTest(APIViewTestCases.APIViewTestCase):
         ]
 
 
-class DeviceBayTest(APIViewTestCases.APIViewTestCase):
-    model = DeviceBay
-    brief_fields = ['device', 'id', 'name', 'url']
+class ModuleBayTest(APIViewTestCases.APIViewTestCase):
+    model = ModuleBay
+    brief_fields = ['description', 'display', 'id', 'installed_module', 'name', 'url']
     bulk_update_data = {
         'description': 'New description',
     }
+    user_permissions = ('dcim.view_device', )
 
     @classmethod
     def setUpTestData(cls):
         manufacturer = Manufacturer.objects.create(name='Test Manufacturer 1', slug='test-manufacturer-1')
         site = Site.objects.create(name='Site 1', slug='site-1')
-        devicerole = DeviceRole.objects.create(name='Test Device Role 1', slug='test-device-role-1', color='ff0000')
+        role = DeviceRole.objects.create(name='Test Device Role 1', slug='test-device-role-1', color='ff0000')
+
+        device_type = DeviceType.objects.create(manufacturer=manufacturer, model='Device Type 1', slug='device-type-1')
+        device = Device.objects.create(device_type=device_type, role=role, name='Device 1', site=site)
+
+        module_bays = (
+            ModuleBay(device=device, name='Device Bay 1'),
+            ModuleBay(device=device, name='Device Bay 2'),
+            ModuleBay(device=device, name='Device Bay 3'),
+        )
+        for module_bay in module_bays:
+            module_bay.save()
+
+        cls.create_data = [
+            {
+                'device': device.pk,
+                'name': 'Device Bay 4',
+            },
+            {
+                'device': device.pk,
+                'name': 'Device Bay 5',
+            },
+            {
+                'device': device.pk,
+                'name': 'Device Bay 6',
+            },
+        ]
+
+
+class DeviceBayTest(APIViewTestCases.APIViewTestCase):
+    model = DeviceBay
+    brief_fields = ['description', 'device', 'display', 'id', 'name', 'url']
+    bulk_update_data = {
+        'description': 'New description',
+    }
+    user_permissions = ('dcim.view_device', )
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer = Manufacturer.objects.create(name='Test Manufacturer 1', slug='test-manufacturer-1')
+        site = Site.objects.create(name='Site 1', slug='site-1')
+        role = DeviceRole.objects.create(name='Test Device Role 1', slug='test-device-role-1', color='ff0000')
 
         device_types = (
             DeviceType(
@@ -1321,10 +1950,10 @@ class DeviceBayTest(APIViewTestCases.APIViewTestCase):
         DeviceType.objects.bulk_create(device_types)
 
         devices = (
-            Device(device_type=device_types[0], device_role=devicerole, name='Device 1', site=site),
-            Device(device_type=device_types[1], device_role=devicerole, name='Device 2', site=site),
-            Device(device_type=device_types[1], device_role=devicerole, name='Device 3', site=site),
-            Device(device_type=device_types[1], device_role=devicerole, name='Device 4', site=site),
+            Device(device_type=device_types[0], role=role, name='Device 1', site=site),
+            Device(device_type=device_types[1], role=role, name='Device 2', site=site),
+            Device(device_type=device_types[1], role=role, name='Device 3', site=site),
+            Device(device_type=device_types[1], role=role, name='Device 4', site=site),
         )
         Device.objects.bulk_create(devices)
 
@@ -1356,45 +1985,109 @@ class DeviceBayTest(APIViewTestCases.APIViewTestCase):
 
 class InventoryItemTest(APIViewTestCases.APIViewTestCase):
     model = InventoryItem
-    brief_fields = ['_depth', 'device', 'id', 'name', 'url']
+    brief_fields = ['_depth', 'description', 'device', 'display', 'id', 'name', 'url']
     bulk_update_data = {
         'description': 'New description',
     }
+    user_permissions = ('dcim.view_device', 'dcim.view_manufacturer')
 
     @classmethod
     def setUpTestData(cls):
         manufacturer = Manufacturer.objects.create(name='Test Manufacturer 1', slug='test-manufacturer-1')
         devicetype = DeviceType.objects.create(manufacturer=manufacturer, model='Device Type 1', slug='device-type-1')
         site = Site.objects.create(name='Site 1', slug='site-1')
-        devicerole = DeviceRole.objects.create(name='Test Device Role 1', slug='test-device-role-1', color='ff0000')
-        device = Device.objects.create(device_type=devicetype, device_role=devicerole, name='Device 1', site=site)
+        role = DeviceRole.objects.create(name='Test Device Role 1', slug='test-device-role-1', color='ff0000')
+        device = Device.objects.create(device_type=devicetype, role=role, name='Device 1', site=site)
 
-        InventoryItem.objects.create(device=device, name='Inventory Item 1', manufacturer=manufacturer)
-        InventoryItem.objects.create(device=device, name='Inventory Item 2', manufacturer=manufacturer)
-        InventoryItem.objects.create(device=device, name='Inventory Item 3', manufacturer=manufacturer)
+        roles = (
+            InventoryItemRole(name='Inventory Item Role 1', slug='inventory-item-role-1'),
+            InventoryItemRole(name='Inventory Item Role 2', slug='inventory-item-role-2'),
+        )
+        InventoryItemRole.objects.bulk_create(roles)
+
+        interfaces = (
+            Interface(device=device, name='Interface 1'),
+            Interface(device=device, name='Interface 2'),
+            Interface(device=device, name='Interface 3'),
+        )
+        Interface.objects.bulk_create(interfaces)
+
+        InventoryItem.objects.create(
+            device=device, name='Inventory Item 1', role=roles[0], manufacturer=manufacturer, component=interfaces[0]
+        )
+        InventoryItem.objects.create(
+            device=device, name='Inventory Item 2', role=roles[0], manufacturer=manufacturer, component=interfaces[1]
+        )
+        InventoryItem.objects.create(
+            device=device, name='Inventory Item 3', role=roles[0], manufacturer=manufacturer, component=interfaces[2]
+        )
 
         cls.create_data = [
             {
                 'device': device.pk,
                 'name': 'Inventory Item 4',
+                'role': roles[1].pk,
                 'manufacturer': manufacturer.pk,
+                'component_type': 'dcim.interface',
+                'component_id': interfaces[0].pk,
             },
             {
                 'device': device.pk,
                 'name': 'Inventory Item 5',
+                'role': roles[1].pk,
                 'manufacturer': manufacturer.pk,
+                'component_type': 'dcim.interface',
+                'component_id': interfaces[1].pk,
             },
             {
                 'device': device.pk,
                 'name': 'Inventory Item 6',
+                'role': roles[1].pk,
                 'manufacturer': manufacturer.pk,
+                'component_type': 'dcim.interface',
+                'component_id': interfaces[2].pk,
             },
         ]
 
 
+class InventoryItemRoleTest(APIViewTestCases.APIViewTestCase):
+    model = InventoryItemRole
+    brief_fields = ['description', 'display', 'id', 'inventoryitem_count', 'name', 'slug', 'url']
+    create_data = [
+        {
+            'name': 'Inventory Item Role 4',
+            'slug': 'inventory-item-role-4',
+            'color': 'ffff00',
+        },
+        {
+            'name': 'Inventory Item Role 5',
+            'slug': 'inventory-item-role-5',
+            'color': 'ffff00',
+        },
+        {
+            'name': 'Inventory Item Role 6',
+            'slug': 'inventory-item-role-6',
+            'color': 'ffff00',
+        },
+    ]
+    bulk_update_data = {
+        'description': 'New description',
+    }
+
+    @classmethod
+    def setUpTestData(cls):
+
+        roles = (
+            InventoryItemRole(name='Inventory Item Role 1', slug='inventory-item-role-1', color='ff0000'),
+            InventoryItemRole(name='Inventory Item Role 2', slug='inventory-item-role-2', color='00ff00'),
+            InventoryItemRole(name='Inventory Item Role 3', slug='inventory-item-role-3', color='0000ff'),
+        )
+        InventoryItemRole.objects.bulk_create(roles)
+
+
 class CableTest(APIViewTestCases.APIViewTestCase):
     model = Cable
-    brief_fields = ['id', 'label', 'url']
+    brief_fields = ['description', 'display', 'id', 'label', 'url']
     bulk_update_data = {
         'length': 100,
         'length_unit': 'm',
@@ -1403,16 +2096,27 @@ class CableTest(APIViewTestCases.APIViewTestCase):
     # TODO: Allow updating cable terminations
     test_update_object = None
 
+    def model_to_dict(self, *args, **kwargs):
+        data = super().model_to_dict(*args, **kwargs)
+
+        # Serialize termination objects
+        if 'a_terminations' in data:
+            data['a_terminations'] = GenericObjectSerializer(data['a_terminations'], many=True).data
+        if 'b_terminations' in data:
+            data['b_terminations'] = GenericObjectSerializer(data['b_terminations'], many=True).data
+
+        return data
+
     @classmethod
     def setUpTestData(cls):
         site = Site.objects.create(name='Site 1', slug='site-1')
         manufacturer = Manufacturer.objects.create(name='Manufacturer 1', slug='manufacturer-1')
         devicetype = DeviceType.objects.create(manufacturer=manufacturer, model='Device Type 1', slug='device-type-1')
-        devicerole = DeviceRole.objects.create(name='Device Role 1', slug='device-role-1', color='ff0000')
+        role = DeviceRole.objects.create(name='Device Role 1', slug='device-role-1', color='ff0000')
 
         devices = (
-            Device(device_type=devicetype, device_role=devicerole, name='Device 1', site=site),
-            Device(device_type=devicetype, device_role=devicerole, name='Device 2', site=site),
+            Device(device_type=devicetype, role=role, name='Device 1', site=site),
+            Device(device_type=devicetype, role=role, name='Device 2', site=site),
         )
         Device.objects.bulk_create(devices)
 
@@ -1423,33 +2127,45 @@ class CableTest(APIViewTestCases.APIViewTestCase):
         Interface.objects.bulk_create(interfaces)
 
         cables = (
-            Cable(termination_a=interfaces[0], termination_b=interfaces[10], label='Cable 1'),
-            Cable(termination_a=interfaces[1], termination_b=interfaces[11], label='Cable 2'),
-            Cable(termination_a=interfaces[2], termination_b=interfaces[12], label='Cable 3'),
+            Cable(a_terminations=[interfaces[0]], b_terminations=[interfaces[10]], label='Cable 1'),
+            Cable(a_terminations=[interfaces[1]], b_terminations=[interfaces[11]], label='Cable 2'),
+            Cable(a_terminations=[interfaces[2]], b_terminations=[interfaces[12]], label='Cable 3'),
         )
         for cable in cables:
             cable.save()
 
         cls.create_data = [
             {
-                'termination_a_type': 'dcim.interface',
-                'termination_a_id': interfaces[4].pk,
-                'termination_b_type': 'dcim.interface',
-                'termination_b_id': interfaces[14].pk,
+                'a_terminations': [{
+                    'object_type': 'dcim.interface',
+                    'object_id': interfaces[4].pk,
+                }],
+                'b_terminations': [{
+                    'object_type': 'dcim.interface',
+                    'object_id': interfaces[14].pk,
+                }],
                 'label': 'Cable 4',
             },
             {
-                'termination_a_type': 'dcim.interface',
-                'termination_a_id': interfaces[5].pk,
-                'termination_b_type': 'dcim.interface',
-                'termination_b_id': interfaces[15].pk,
+                'a_terminations': [{
+                    'object_type': 'dcim.interface',
+                    'object_id': interfaces[5].pk,
+                }],
+                'b_terminations': [{
+                    'object_type': 'dcim.interface',
+                    'object_id': interfaces[15].pk,
+                }],
                 'label': 'Cable 5',
             },
             {
-                'termination_a_type': 'dcim.interface',
-                'termination_a_id': interfaces[6].pk,
-                'termination_b_type': 'dcim.interface',
-                'termination_b_id': interfaces[16].pk,
+                'a_terminations': [{
+                    'object_type': 'dcim.interface',
+                    'object_id': interfaces[6].pk,
+                }],
+                'b_terminations': [{
+                    'object_type': 'dcim.interface',
+                    'object_id': interfaces[16].pk,
+                }],
                 'label': 'Cable 6',
             },
         ]
@@ -1457,70 +2173,65 @@ class CableTest(APIViewTestCases.APIViewTestCase):
 
 class ConnectedDeviceTest(APITestCase):
 
-    def setUp(self):
+    @classmethod
+    def setUpTestData(cls):
+        site = Site.objects.create(name='Site 1', slug='site-1')
+        manufacturer = Manufacturer.objects.create(name='Manufacturer 1', slug='manufacturer-1')
+        devicetype = DeviceType.objects.create(manufacturer=manufacturer, model='Device Type 1', slug='device-type-1')
+        role = DeviceRole.objects.create(name='Device Role 1', slug='device-role-1', color='ff0000')
+        devices = (
+            Device(device_type=devicetype, role=role, name='TestDevice1', site=site),
+            Device(device_type=devicetype, role=role, name='TestDevice2', site=site),
+        )
+        Device.objects.bulk_create(devices)
+        interfaces = (
+            Interface(device=devices[0], name='eth0'),
+            Interface(device=devices[1], name='eth0'),
+            Interface(device=devices[0], name='eth1'),  # Not connected
+        )
+        Interface.objects.bulk_create(interfaces)
 
-        super().setUp()
-
-        self.site1 = Site.objects.create(name='Test Site 1', slug='test-site-1')
-        self.site2 = Site.objects.create(name='Test Site 2', slug='test-site-2')
-        manufacturer = Manufacturer.objects.create(name='Test Manufacturer 1', slug='test-manufacturer-1')
-        self.devicetype1 = DeviceType.objects.create(
-            manufacturer=manufacturer, model='Test Device Type 1', slug='test-device-type-1'
-        )
-        self.devicetype2 = DeviceType.objects.create(
-            manufacturer=manufacturer, model='Test Device Type 2', slug='test-device-type-2'
-        )
-        self.devicerole1 = DeviceRole.objects.create(
-            name='Test Device Role 1', slug='test-device-role-1', color='ff0000'
-        )
-        self.devicerole2 = DeviceRole.objects.create(
-            name='Test Device Role 2', slug='test-device-role-2', color='00ff00'
-        )
-        self.device1 = Device.objects.create(
-            device_type=self.devicetype1, device_role=self.devicerole1, name='TestDevice1', site=self.site1
-        )
-        self.device2 = Device.objects.create(
-            device_type=self.devicetype1, device_role=self.devicerole1, name='TestDevice2', site=self.site1
-        )
-        self.interface1 = Interface.objects.create(device=self.device1, name='eth0')
-        self.interface2 = Interface.objects.create(device=self.device2, name='eth0')
-
-        cable = Cable(termination_a=self.interface1, termination_b=self.interface2)
+        cable = Cable(a_terminations=[interfaces[0]], b_terminations=[interfaces[1]])
         cable.save()
 
+    @override_settings(EXEMPT_VIEW_PERMISSIONS=['*'])
     def test_get_connected_device(self):
-
         url = reverse('dcim-api:connected-device-list')
-        response = self.client.get(url + '?peer_device=TestDevice2&peer_interface=eth0', **self.header)
 
+        url_params = '?peer_device=TestDevice1&peer_interface=eth0'
+        response = self.client.get(url + url_params, **self.header)
         self.assertHttpStatus(response, status.HTTP_200_OK)
-        self.assertEqual(response.data['name'], self.device1.name)
+        self.assertEqual(response.data['name'], 'TestDevice2')
+
+        url_params = '?peer_device=TestDevice1&peer_interface=eth1'
+        response = self.client.get(url + url_params, **self.header)
+        self.assertHttpStatus(response, status.HTTP_404_NOT_FOUND)
 
 
 class VirtualChassisTest(APIViewTestCases.APIViewTestCase):
     model = VirtualChassis
-    brief_fields = ['id', 'master', 'member_count', 'name', 'url']
+    brief_fields = ['description', 'display', 'id', 'master', 'member_count', 'name', 'url']
 
     @classmethod
     def setUpTestData(cls):
         site = Site.objects.create(name='Test Site', slug='test-site')
         manufacturer = Manufacturer.objects.create(name='Manufacturer 1', slug='manufacturer-1')
         devicetype = DeviceType.objects.create(manufacturer=manufacturer, model='Device Type', slug='device-type')
-        devicerole = DeviceRole.objects.create(name='Device Role', slug='device-role', color='ff0000')
+        role = DeviceRole.objects.create(name='Device Role', slug='device-role', color='ff0000')
 
         devices = (
-            Device(name='Device 1', device_type=devicetype, device_role=devicerole, site=site),
-            Device(name='Device 2', device_type=devicetype, device_role=devicerole, site=site),
-            Device(name='Device 3', device_type=devicetype, device_role=devicerole, site=site),
-            Device(name='Device 4', device_type=devicetype, device_role=devicerole, site=site),
-            Device(name='Device 5', device_type=devicetype, device_role=devicerole, site=site),
-            Device(name='Device 6', device_type=devicetype, device_role=devicerole, site=site),
-            Device(name='Device 7', device_type=devicetype, device_role=devicerole, site=site),
-            Device(name='Device 8', device_type=devicetype, device_role=devicerole, site=site),
-            Device(name='Device 9', device_type=devicetype, device_role=devicerole, site=site),
-            Device(name='Device 10', device_type=devicetype, device_role=devicerole, site=site),
-            Device(name='Device 11', device_type=devicetype, device_role=devicerole, site=site),
-            Device(name='Device 12', device_type=devicetype, device_role=devicerole, site=site),
+            Device(name='Device 1', device_type=devicetype, role=role, site=site),
+            Device(name='Device 2', device_type=devicetype, role=role, site=site),
+            Device(name='Device 3', device_type=devicetype, role=role, site=site),
+            Device(name='Device 4', device_type=devicetype, role=role, site=site),
+            Device(name='Device 5', device_type=devicetype, role=role, site=site),
+            Device(name='Device 6', device_type=devicetype, role=role, site=site),
+            Device(name='Device 7', device_type=devicetype, role=role, site=site),
+            Device(name='Device 8', device_type=devicetype, role=role, site=site),
+            Device(name='Device 9', device_type=devicetype, role=role, site=site),
+            Device(name='Device 10', device_type=devicetype, role=role, site=site),
+            Device(name='Device 11', device_type=devicetype, role=role, site=site),
+            Device(name='Device 12', device_type=devicetype, role=role, site=site),
         )
         Device.objects.bulk_create(devices)
 
@@ -1530,7 +2241,7 @@ class VirtualChassisTest(APIViewTestCases.APIViewTestCase):
             for j in range(0, 13):
                 interfaces.append(
                     # Interface name starts with parent device's position in VC; e.g. 1/1, 1/2, 1/3...
-                    Interface(device=device, name=f'{i%3+1}/{j}', type=InterfaceTypeChoices.TYPE_1GE_FIXED)
+                    Interface(device=device, name=f'{i % 3 + 1}/{j}', type=InterfaceTypeChoices.TYPE_1GE_FIXED)
                 )
         Interface.objects.bulk_create(interfaces)
 
@@ -1574,12 +2285,14 @@ class VirtualChassisTest(APIViewTestCases.APIViewTestCase):
 
         cls.bulk_update_data = {
             'domain': 'newdomain',
+            'master': None
         }
 
 
 class PowerPanelTest(APIViewTestCases.APIViewTestCase):
     model = PowerPanel
-    brief_fields = ['id', 'name', 'powerfeed_count', 'url']
+    brief_fields = ['description', 'display', 'id', 'name', 'powerfeed_count', 'url']
+    user_permissions = ('dcim.view_site', )
 
     @classmethod
     def setUpTestData(cls):
@@ -1588,17 +2301,17 @@ class PowerPanelTest(APIViewTestCases.APIViewTestCase):
             Site.objects.create(name='Site 2', slug='site-2'),
         )
 
-        rack_groups = (
-            RackGroup.objects.create(name='Rack Group 1', slug='rack-group-1', site=sites[0]),
-            RackGroup.objects.create(name='Rack Group 2', slug='rack-group-2', site=sites[0]),
-            RackGroup.objects.create(name='Rack Group 3', slug='rack-group-3', site=sites[0]),
-            RackGroup.objects.create(name='Rack Group 4', slug='rack-group-3', site=sites[1]),
+        locations = (
+            Location.objects.create(name='Location 1', slug='location-1', site=sites[0]),
+            Location.objects.create(name='Location 2', slug='location-2', site=sites[0]),
+            Location.objects.create(name='Location 3', slug='location-3', site=sites[0]),
+            Location.objects.create(name='Location 4', slug='location-3', site=sites[1]),
         )
 
         power_panels = (
-            PowerPanel(site=sites[0], rack_group=rack_groups[0], name='Power Panel 1'),
-            PowerPanel(site=sites[0], rack_group=rack_groups[1], name='Power Panel 2'),
-            PowerPanel(site=sites[0], rack_group=rack_groups[2], name='Power Panel 3'),
+            PowerPanel(site=sites[0], location=locations[0], name='Power Panel 1'),
+            PowerPanel(site=sites[0], location=locations[1], name='Power Panel 2'),
+            PowerPanel(site=sites[0], location=locations[2], name='Power Panel 3'),
         )
         PowerPanel.objects.bulk_create(power_panels)
 
@@ -1606,50 +2319,51 @@ class PowerPanelTest(APIViewTestCases.APIViewTestCase):
             {
                 'name': 'Power Panel 4',
                 'site': sites[0].pk,
-                'rack_group': rack_groups[0].pk,
+                'location': locations[0].pk,
             },
             {
                 'name': 'Power Panel 5',
                 'site': sites[0].pk,
-                'rack_group': rack_groups[1].pk,
+                'location': locations[1].pk,
             },
             {
                 'name': 'Power Panel 6',
                 'site': sites[0].pk,
-                'rack_group': rack_groups[2].pk,
+                'location': locations[2].pk,
             },
         ]
 
         cls.bulk_update_data = {
             'site': sites[1].pk,
-            'rack_group': rack_groups[3].pk
+            'location': locations[3].pk
         }
 
 
 class PowerFeedTest(APIViewTestCases.APIViewTestCase):
     model = PowerFeed
-    brief_fields = ['cable', 'id', 'name', 'url']
+    brief_fields = ['_occupied', 'cable', 'description', 'display', 'id', 'name', 'url']
     bulk_update_data = {
         'status': 'planned',
     }
+    user_permissions = ('dcim.view_powerpanel', )
 
     @classmethod
     def setUpTestData(cls):
         site = Site.objects.create(name='Site 1', slug='site-1')
-        rackgroup = RackGroup.objects.create(site=site, name='Rack Group 1', slug='rack-group-1')
+        location = Location.objects.create(site=site, name='Location 1', slug='location-1')
         rackrole = RackRole.objects.create(name='Rack Role 1', slug='rack-role-1', color='ff0000')
 
         racks = (
-            Rack(site=site, group=rackgroup, role=rackrole, name='Rack 1'),
-            Rack(site=site, group=rackgroup, role=rackrole, name='Rack 2'),
-            Rack(site=site, group=rackgroup, role=rackrole, name='Rack 3'),
-            Rack(site=site, group=rackgroup, role=rackrole, name='Rack 4'),
+            Rack(site=site, location=location, role=rackrole, name='Rack 1'),
+            Rack(site=site, location=location, role=rackrole, name='Rack 2'),
+            Rack(site=site, location=location, role=rackrole, name='Rack 3'),
+            Rack(site=site, location=location, role=rackrole, name='Rack 4'),
         )
         Rack.objects.bulk_create(racks)
 
         power_panels = (
-            PowerPanel(site=site, rack_group=rackgroup, name='Power Panel 1'),
-            PowerPanel(site=site, rack_group=rackgroup, name='Power Panel 2'),
+            PowerPanel(site=site, location=location, name='Power Panel 1'),
+            PowerPanel(site=site, location=location, name='Power Panel 2'),
         )
         PowerPanel.objects.bulk_create(power_panels)
 
@@ -1677,5 +2391,59 @@ class PowerFeedTest(APIViewTestCases.APIViewTestCase):
                 'power_panel': power_panels[1].pk,
                 'rack': racks[3].pk,
                 'type': REDUNDANT,
+            },
+        ]
+
+
+class VirtualDeviceContextTest(APIViewTestCases.APIViewTestCase):
+    model = VirtualDeviceContext
+    brief_fields = ['description', 'device', 'display', 'id', 'identifier', 'name', 'url']
+    bulk_update_data = {
+        'status': 'planned',
+    }
+
+    @classmethod
+    def setUpTestData(cls):
+        site = Site.objects.create(name='Test Site', slug='test-site')
+        manufacturer = Manufacturer.objects.create(name='Manufacturer 1', slug='manufacturer-1')
+        devicetype = DeviceType.objects.create(manufacturer=manufacturer, model='Device Type', slug='device-type')
+        role = DeviceRole.objects.create(name='Device Role', slug='device-role', color='ff0000')
+
+        devices = (
+            Device(name='Device 1', device_type=devicetype, role=role, site=site),
+            Device(name='Device 2', device_type=devicetype, role=role, site=site),
+            Device(name='Device 3', device_type=devicetype, role=role, site=site),
+        )
+        Device.objects.bulk_create(devices)
+
+        vdcs = (
+            VirtualDeviceContext(device=devices[1], name='VDC 1', identifier=1, status='active'),
+            VirtualDeviceContext(device=devices[1], name='VDC 2', identifier=2, status='active'),
+            VirtualDeviceContext(device=devices[2], name='VDC 1', identifier=1, status='active'),
+            VirtualDeviceContext(device=devices[2], name='VDC 2', identifier=2, status='active'),
+            VirtualDeviceContext(device=devices[2], name='VDC 3', identifier=3, status='active'),
+            VirtualDeviceContext(device=devices[2], name='VDC 4', identifier=4, status='active'),
+            VirtualDeviceContext(device=devices[2], name='VDC 5', identifier=5, status='active'),
+        )
+        VirtualDeviceContext.objects.bulk_create(vdcs)
+
+        cls.create_data = [
+            {
+                'device': devices[0].pk,
+                'status': 'active',
+                'name': 'VDC 1',
+                'identifier': 1,
+            },
+            {
+                'device': devices[0].pk,
+                'status': 'active',
+                'name': 'VDC 2',
+                'identifier': 2,
+            },
+            {
+                'device': devices[1].pk,
+                'status': 'active',
+                'name': 'VDC 3',
+                # Omit identifier to test uniqueness constraint
             },
         ]

@@ -2,7 +2,7 @@
 
 Plugins are packaged [Django](https://docs.djangoproject.com/) apps that can be installed alongside NetBox to provide custom functionality not present in the core application. Plugins can introduce their own models and views, but cannot interfere with existing components. A NetBox user may opt to install plugins provided by the community or build his or her own.
 
-Plugins are supported on NetBox v2.8 and later.
+Please see the documented instructions for [installing a plugin](./installation.md) to get started.
 
 ## Capabilities
 
@@ -25,67 +25,3 @@ Either by policy or by technical limitation, the interaction of plugins with Net
 * **Override core templates.** Plugins can inject additional content where supported, but may not manipulate or remove core content.
 * **Modify core settings.** A configuration registry is provided for plugins, however they cannot alter or delete the core configuration.
 * **Disable core components.** Plugins are not permitted to disable or hide core NetBox components.
-
-## Installing Plugins
-
-The instructions below detail the process for installing and enabling a NetBox plugin.
-
-### Install Package
-
-Download and install the plugin package per its installation instructions. Plugins published via PyPI are typically installed using pip. Be sure to install the plugin within NetBox's virtual environment.
-
-```no-highlight
-$ source /opt/netbox/venv/bin/activate
-(venv) $ pip install <package>
-```
-
-Alternatively, you may wish to install the plugin manually by running `python setup.py install`. If you are developing a plugin and want to install it only temporarily, run `python setup.py develop` instead.
-
-### Enable the Plugin
-
-In `configuration.py`, add the plugin's name to the `PLUGINS` list:
-
-```python
-PLUGINS = [
-    'plugin_name',
-]
-```
-
-### Configure Plugin
-
-If the plugin requires any configuration, define it in `configuration.py` under the `PLUGINS_CONFIG` parameter. The available configuration parameters should be detailed in the plugin's README file.
-
-```no-highlight
-PLUGINS_CONFIG = {
-    'plugin_name': {
-        'foo': 'bar',
-        'buzz': 'bazz'
-    }
-}
-```
-
-### Run Database Migrations
-
-If the plugin introduces new database models, run the provided schema migrations:
-
-```no-highlight
-(venv) $ cd /opt/netbox/netbox/
-(venv) $ python3 manage.py migrate
-```
-
-### Collect Static Files
-
-Plugins may package static files to be served directly by the HTTP front end. Ensure that these are copied to the static root directory with the `collectstatic` management command:
-
-```no-highlight
-(venv) $ cd /opt/netbox/netbox/
-(venv) $ python3 manage.py collectstatic
-```
-
-### Restart WSGI Service
-
-Restart the WSGI service to load the new plugin:
-
-```no-highlight
-# sudo systemctl restart netbox
-```

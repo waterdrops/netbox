@@ -2,15 +2,22 @@ from django.db.models import Q
 
 from .choices import InterfaceTypeChoices
 
+# Exclude SVG images (unsupported by PIL)
+DEVICETYPE_IMAGE_FORMATS = 'image/bmp,image/gif,image/jpeg,image/png,image/tiff,image/webp'
+
 
 #
 # Racks
 #
 
 RACK_U_HEIGHT_DEFAULT = 42
+RACK_U_HEIGHT_MAX = 100
 
 RACK_ELEVATION_BORDER_WIDTH = 2
-RACK_ELEVATION_LEGEND_WIDTH_DEFAULT = 30
+RACK_ELEVATION_DEFAULT_LEGEND_WIDTH = 30
+RACK_ELEVATION_DEFAULT_MARGIN_WIDTH = 15
+
+RACK_STARTING_UNIT_DEFAULT = 1
 
 
 #
@@ -26,11 +33,12 @@ REARPORT_POSITIONS_MAX = 1024
 #
 
 INTERFACE_MTU_MIN = 1
-INTERFACE_MTU_MAX = 32767  # Max value of a signed 16-bit integer
+INTERFACE_MTU_MAX = 65536
 
 VIRTUAL_IFACE_TYPES = [
     InterfaceTypeChoices.TYPE_VIRTUAL,
     InterfaceTypeChoices.TYPE_LAG,
+    InterfaceTypeChoices.TYPE_BRIDGE,
 ]
 
 WIRELESS_IFACE_TYPES = [
@@ -39,25 +47,53 @@ WIRELESS_IFACE_TYPES = [
     InterfaceTypeChoices.TYPE_80211N,
     InterfaceTypeChoices.TYPE_80211AC,
     InterfaceTypeChoices.TYPE_80211AD,
+    InterfaceTypeChoices.TYPE_80211AX,
+    InterfaceTypeChoices.TYPE_80211AY,
+    InterfaceTypeChoices.TYPE_80211BE,
+    InterfaceTypeChoices.TYPE_802151,
+    InterfaceTypeChoices.TYPE_802154,
+    InterfaceTypeChoices.TYPE_OTHER_WIRELESS,
 ]
 
 NONCONNECTABLE_IFACE_TYPES = VIRTUAL_IFACE_TYPES + WIRELESS_IFACE_TYPES
 
 
 #
-# PowerFeeds
+# Device components
 #
 
-POWERFEED_VOLTAGE_DEFAULT = 120
+MODULE_TOKEN = '{module}'
 
-POWERFEED_AMPERAGE_DEFAULT = 20
+MODULAR_COMPONENT_TEMPLATE_MODELS = Q(
+    app_label='dcim',
+    model__in=(
+        'consoleporttemplate',
+        'consoleserverporttemplate',
+        'frontporttemplate',
+        'interfacetemplate',
+        'poweroutlettemplate',
+        'powerporttemplate',
+        'rearporttemplate',
+    ))
 
-POWERFEED_MAX_UTILIZATION_DEFAULT = 80  # Percentage
+MODULAR_COMPONENT_MODELS = Q(
+    app_label='dcim',
+    model__in=(
+        'consoleport',
+        'consoleserverport',
+        'frontport',
+        'interface',
+        'poweroutlet',
+        'powerport',
+        'rearport',
+    ))
 
 
 #
 # Cabling and connections
 #
+
+CABLE_TRACE_SVG_DEFAULT_WIDTH = 400
 
 # Cable endpoint types
 CABLE_TERMINATION_MODELS = Q(
@@ -87,3 +123,18 @@ COMPATIBLE_TERMINATION_TYPES = {
     'powerport': ['poweroutlet', 'powerfeed'],
     'rearport': ['consoleport', 'consoleserverport', 'interface', 'frontport', 'rearport', 'circuittermination'],
 }
+
+# Models which can serve to scope an object by location
+LOCATION_SCOPE_TYPES = (
+    'region', 'sitegroup', 'site', 'location',
+)
+
+
+#
+# MAC addresses
+#
+
+MACADDRESS_ASSIGNMENT_MODELS = Q(
+    Q(app_label='dcim', model='interface') |
+    Q(app_label='virtualization', model='vminterface')
+)

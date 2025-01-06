@@ -11,7 +11,7 @@ This will launch a lightly customized version of [the built-in Django shell](htt
 ```
 $ ./manage.py nbshell
 ### NetBox interactive shell (localhost)
-### Python 3.6.9 | Django 2.2.11 | NetBox 2.7.10
+### Python 3.7.10 | Django 3.2.5 | NetBox 3.0
 ### lsmodels() will show available models. Use help(<model>) for more info.
 ```
 
@@ -153,13 +153,8 @@ New objects can be created by instantiating the desired model, defining values f
 ```
 >>> lab1 = Site.objects.get(pk=7)
 >>> myvlan = VLAN(vid=123, name='MyNewVLAN', site=lab1)
+>>> myvlan.full_clean()
 >>> myvlan.save()
-```
-
-Alternatively, the above can be performed as a single operation. (Note, however, that `save()` does _not_ return the new instance for reuse.)
-
-```
->>> VLAN(vid=123, name='MyNewVLAN', site=Site.objects.get(pk=7)).save()
 ```
 
 To modify an existing object, we retrieve it, update the desired field(s), and call `save()` again.
@@ -169,6 +164,7 @@ To modify an existing object, we retrieve it, update the desired field(s), and c
 >>> vlan.name
 'MyNewVLAN'
 >>> vlan.name = 'BetterName'
+>>> vlan.full_clean()
 >>> vlan.save()
 >>> VLAN.objects.get(pk=1280).name
 'BetterName'
@@ -194,7 +190,7 @@ To delete multiple objects at once, call `delete()` on a filtered queryset. It's
 >>> Device.objects.filter(name__icontains='test').count()
 27
 >>> Device.objects.filter(name__icontains='test').delete()
-(35, {'dcim.DeviceBay': 0, 'secrets.Secret': 0, 'dcim.InterfaceConnection': 4,
+(35, {'dcim.DeviceBay': 0, 'dcim.InterfaceConnection': 4,
 'extras.ImageAttachment': 0, 'dcim.Device': 27, 'dcim.Interface': 4,
 'dcim.ConsolePort': 0, 'dcim.PowerPort': 0})
 ```

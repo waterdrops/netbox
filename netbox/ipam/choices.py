@@ -1,3 +1,5 @@
+from django.utils.translation import gettext_lazy as _
+
 from utilities.choices import ChoiceSet
 
 
@@ -17,32 +19,45 @@ class IPAddressFamilyChoices(ChoiceSet):
 #
 
 class PrefixStatusChoices(ChoiceSet):
+    key = 'Prefix.status'
 
     STATUS_CONTAINER = 'container'
     STATUS_ACTIVE = 'active'
     STATUS_RESERVED = 'reserved'
     STATUS_DEPRECATED = 'deprecated'
 
-    CHOICES = (
-        (STATUS_CONTAINER, 'Container'),
-        (STATUS_ACTIVE, 'Active'),
-        (STATUS_RESERVED, 'Reserved'),
-        (STATUS_DEPRECATED, 'Deprecated'),
-    )
-
-    CSS_CLASSES = {
-        STATUS_CONTAINER: 'default',
-        STATUS_ACTIVE: 'primary',
-        STATUS_RESERVED: 'info',
-        STATUS_DEPRECATED: 'danger',
-    }
+    CHOICES = [
+        (STATUS_CONTAINER, _('Container'), 'gray'),
+        (STATUS_ACTIVE, _('Active'), 'blue'),
+        (STATUS_RESERVED, _('Reserved'), 'cyan'),
+        (STATUS_DEPRECATED, _('Deprecated'), 'red'),
+    ]
 
 
 #
-# IPAddresses
+# IP Ranges
+#
+
+class IPRangeStatusChoices(ChoiceSet):
+    key = 'IPRange.status'
+
+    STATUS_ACTIVE = 'active'
+    STATUS_RESERVED = 'reserved'
+    STATUS_DEPRECATED = 'deprecated'
+
+    CHOICES = [
+        (STATUS_ACTIVE, _('Active'), 'blue'),
+        (STATUS_RESERVED, _('Reserved'), 'cyan'),
+        (STATUS_DEPRECATED, _('Deprecated'), 'red'),
+    ]
+
+
+#
+# IP Addresses
 #
 
 class IPAddressStatusChoices(ChoiceSet):
+    key = 'IPAddress.status'
 
     STATUS_ACTIVE = 'active'
     STATUS_RESERVED = 'reserved'
@@ -50,21 +65,13 @@ class IPAddressStatusChoices(ChoiceSet):
     STATUS_DHCP = 'dhcp'
     STATUS_SLAAC = 'slaac'
 
-    CHOICES = (
-        (STATUS_ACTIVE, 'Active'),
-        (STATUS_RESERVED, 'Reserved'),
-        (STATUS_DEPRECATED, 'Deprecated'),
-        (STATUS_DHCP, 'DHCP'),
-        (STATUS_SLAAC, 'SLAAC'),
-    )
-
-    CSS_CLASSES = {
-        STATUS_ACTIVE: 'primary',
-        STATUS_RESERVED: 'info',
-        STATUS_DEPRECATED: 'danger',
-        STATUS_DHCP: 'success',
-        STATUS_SLAAC: 'success',
-    }
+    CHOICES = [
+        (STATUS_ACTIVE, _('Active'), 'blue'),
+        (STATUS_RESERVED, _('Reserved'), 'cyan'),
+        (STATUS_DEPRECATED, _('Deprecated'), 'red'),
+        (STATUS_DHCP, _('DHCP'), 'green'),
+        (STATUS_SLAAC, _('SLAAC'), 'purple'),
+    ]
 
 
 class IPAddressRoleChoices(ChoiceSet):
@@ -79,26 +86,57 @@ class IPAddressRoleChoices(ChoiceSet):
     ROLE_CARP = 'carp'
 
     CHOICES = (
-        (ROLE_LOOPBACK, 'Loopback'),
-        (ROLE_SECONDARY, 'Secondary'),
-        (ROLE_ANYCAST, 'Anycast'),
-        (ROLE_VIP, 'VIP'),
-        (ROLE_VRRP, 'VRRP'),
-        (ROLE_HSRP, 'HSRP'),
-        (ROLE_GLBP, 'GLBP'),
-        (ROLE_CARP, 'CARP'),
+        (ROLE_LOOPBACK, _('Loopback'), 'gray'),
+        (ROLE_SECONDARY, _('Secondary'), 'blue'),
+        (ROLE_ANYCAST, _('Anycast'), 'yellow'),
+        (ROLE_VIP, 'VIP', 'purple'),
+        (ROLE_VRRP, 'VRRP', 'green'),
+        (ROLE_HSRP, 'HSRP', 'green'),
+        (ROLE_GLBP, 'GLBP', 'green'),
+        (ROLE_CARP, 'CARP', 'green'),
     )
 
-    CSS_CLASSES = {
-        ROLE_LOOPBACK: 'default',
-        ROLE_SECONDARY: 'primary',
-        ROLE_ANYCAST: 'warning',
-        ROLE_VIP: 'success',
-        ROLE_VRRP: 'success',
-        ROLE_HSRP: 'success',
-        ROLE_GLBP: 'success',
-        ROLE_CARP: 'success',
-    }
+
+#
+# FHRP
+#
+
+class FHRPGroupProtocolChoices(ChoiceSet):
+
+    PROTOCOL_VRRP2 = 'vrrp2'
+    PROTOCOL_VRRP3 = 'vrrp3'
+    PROTOCOL_HSRP = 'hsrp'
+    PROTOCOL_GLBP = 'glbp'
+    PROTOCOL_CARP = 'carp'
+    PROTOCOL_CLUSTERXL = 'clusterxl'
+    PROTOCOL_OTHER = 'other'
+
+    CHOICES = (
+        (_('Standard'), (
+            (PROTOCOL_VRRP2, 'VRRPv2'),
+            (PROTOCOL_VRRP3, 'VRRPv3'),
+            (PROTOCOL_CARP, 'CARP'),
+        )),
+        (_('CheckPoint'), (
+            (PROTOCOL_CLUSTERXL, 'ClusterXL'),
+        )),
+        (_('Cisco'), (
+            (PROTOCOL_HSRP, 'HSRP'),
+            (PROTOCOL_GLBP, 'GLBP'),
+        )),
+        (PROTOCOL_OTHER, 'Other'),
+    )
+
+
+class FHRPGroupAuthTypeChoices(ChoiceSet):
+
+    AUTHENTICATION_PLAINTEXT = 'plaintext'
+    AUTHENTICATION_MD5 = 'md5'
+
+    CHOICES = (
+        (AUTHENTICATION_PLAINTEXT, _('Plaintext')),
+        (AUTHENTICATION_MD5, 'MD5'),
+    )
 
 
 #
@@ -106,22 +144,28 @@ class IPAddressRoleChoices(ChoiceSet):
 #
 
 class VLANStatusChoices(ChoiceSet):
+    key = 'VLAN.status'
 
     STATUS_ACTIVE = 'active'
     STATUS_RESERVED = 'reserved'
     STATUS_DEPRECATED = 'deprecated'
 
-    CHOICES = (
-        (STATUS_ACTIVE, 'Active'),
-        (STATUS_RESERVED, 'Reserved'),
-        (STATUS_DEPRECATED, 'Deprecated'),
-    )
+    CHOICES = [
+        (STATUS_ACTIVE, _('Active'), 'blue'),
+        (STATUS_RESERVED, _('Reserved'), 'cyan'),
+        (STATUS_DEPRECATED, _('Deprecated'), 'red'),
+    ]
 
-    CSS_CLASSES = {
-        STATUS_ACTIVE: 'primary',
-        STATUS_RESERVED: 'info',
-        STATUS_DEPRECATED: 'danger',
-    }
+
+class VLANQinQRoleChoices(ChoiceSet):
+
+    ROLE_SERVICE = 'svlan'
+    ROLE_CUSTOMER = 'cvlan'
+
+    CHOICES = [
+        (ROLE_SERVICE, _('Service'), 'blue'),
+        (ROLE_CUSTOMER, _('Customer'), 'orange'),
+    ]
 
 
 #
@@ -132,8 +176,10 @@ class ServiceProtocolChoices(ChoiceSet):
 
     PROTOCOL_TCP = 'tcp'
     PROTOCOL_UDP = 'udp'
+    PROTOCOL_SCTP = 'sctp'
 
     CHOICES = (
         (PROTOCOL_TCP, 'TCP'),
         (PROTOCOL_UDP, 'UDP'),
+        (PROTOCOL_SCTP, 'SCTP'),
     )

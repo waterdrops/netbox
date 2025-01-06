@@ -1,28 +1,69 @@
+from django.conf import settings
+from django.utils.translation import gettext_lazy as _
+
+__all__ = (
+    'ChoiceSet',
+    'unpack_grouped_choices',
+)
+
+
 class ChoiceSetMeta(type):
     """
     Metaclass for ChoiceSet
     """
+    def __new__(mcs, name, bases, attrs):
+
+        # Extend static choices with any configured choices
+        if key := attrs.get('key'):
+            assert type(attrs['CHOICES']) is list, _(
+                "{name} has a key defined but CHOICES is not a list"
+            ).format(name=name)
+            app = attrs['__module__'].split('.', 1)[0]
+            replace_key = f'{app}.{key}'
+            extend_key = f'{replace_key}+' if replace_key else None
+            if replace_key and replace_key in settings.FIELD_CHOICES:
+                # Replace the stock choices
+                attrs['CHOICES'] = settings.FIELD_CHOICES[replace_key]
+            elif extend_key and extend_key in settings.FIELD_CHOICES:
+                # Extend the stock choices
+                attrs['CHOICES'].extend(settings.FIELD_CHOICES[extend_key])
+
+        # Define choice tuples and color maps
+        attrs['_choices'] = []
+        attrs['colors'] = {}
+        for choice in attrs['CHOICES']:
+            if isinstance(choice[1], (list, tuple)):
+                grouped_choices = []
+                for c in choice[1]:
+                    grouped_choices.append((c[0], c[1]))
+                    if len(c) == 3:
+                        attrs['colors'][c[0]] = c[2]
+                attrs['_choices'].append((choice[0], grouped_choices))
+            else:
+                attrs['_choices'].append((choice[0], choice[1]))
+                if len(choice) == 3:
+                    attrs['colors'][choice[0]] = choice[2]
+
+        return super().__new__(mcs, name, bases, attrs)
+
     def __call__(cls, *args, **kwargs):
-        # Django will check if a 'choices' value is callable, and if so assume that it returns an iterable
-        return getattr(cls, 'CHOICES', ())
+        # django-filters will check if a 'choices' value is callable, and if so assume that it returns an iterable
+        return getattr(cls, '_choices', ())
 
     def __iter__(cls):
-        choices = getattr(cls, 'CHOICES', ())
-        return iter(choices)
+        return iter(getattr(cls, '_choices', ()))
 
 
 class ChoiceSet(metaclass=ChoiceSetMeta):
-
+    """
+    Holds an iterable of choice tuples suitable for passing to a Django model or form field. Choices can be defined
+    statically within the class as CHOICES and/or gleaned from the FIELD_CHOICES configuration parameter.
+    """
     CHOICES = list()
 
     @classmethod
     def values(cls):
-        return [c[0] for c in unpack_grouped_choices(cls.CHOICES)]
-
-    @classmethod
-    def as_dict(cls):
-        # Unpack grouped choices before casting as a dict
-        return dict(unpack_grouped_choices(cls.CHOICES))
+        return [c[0] for c in unpack_grouped_choices(cls._choices)]
 
 
 def unpack_grouped_choices(choices):
@@ -58,94 +99,3 @@ def unpack_grouped_choices(choices):
         else:
             unpacked_choices.append((key, value))
     return unpacked_choices
-
-
-#
-# Generic color choices
-#
-
-class ColorChoices(ChoiceSet):
-    COLOR_DARK_RED = 'aa1409'
-    COLOR_RED = 'f44336'
-    COLOR_PINK = 'e91e63'
-    COLOR_ROSE = 'ffe4e1'
-    COLOR_FUCHSIA = 'ff66ff'
-    COLOR_PURPLE = '9c27b0'
-    COLOR_DARK_PURPLE = '673ab7'
-    COLOR_INDIGO = '3f51b5'
-    COLOR_BLUE = '2196f3'
-    COLOR_LIGHT_BLUE = '03a9f4'
-    COLOR_CYAN = '00bcd4'
-    COLOR_TEAL = '009688'
-    COLOR_AQUA = '00ffff'
-    COLOR_DARK_GREEN = '2f6a31'
-    COLOR_GREEN = '4caf50'
-    COLOR_LIGHT_GREEN = '8bc34a'
-    COLOR_LIME = 'cddc39'
-    COLOR_YELLOW = 'ffeb3b'
-    COLOR_AMBER = 'ffc107'
-    COLOR_ORANGE = 'ff9800'
-    COLOR_DARK_ORANGE = 'ff5722'
-    COLOR_BROWN = '795548'
-    COLOR_LIGHT_GREY = 'c0c0c0'
-    COLOR_GREY = '9e9e9e'
-    COLOR_DARK_GREY = '607d8b'
-    COLOR_BLACK = '111111'
-    COLOR_WHITE = 'ffffff'
-
-    CHOICES = (
-        (COLOR_DARK_RED, 'Dark red'),
-        (COLOR_RED, 'Red'),
-        (COLOR_PINK, 'Pink'),
-        (COLOR_ROSE, 'Rose'),
-        (COLOR_FUCHSIA, 'Fuchsia'),
-        (COLOR_PURPLE, 'Purple'),
-        (COLOR_DARK_PURPLE, 'Dark purple'),
-        (COLOR_INDIGO, 'Indigo'),
-        (COLOR_BLUE, 'Blue'),
-        (COLOR_LIGHT_BLUE, 'Light blue'),
-        (COLOR_CYAN, 'Cyan'),
-        (COLOR_TEAL, 'Teal'),
-        (COLOR_AQUA, 'Aqua'),
-        (COLOR_DARK_GREEN, 'Dark green'),
-        (COLOR_GREEN, 'Green'),
-        (COLOR_LIGHT_GREEN, 'Light green'),
-        (COLOR_LIME, 'Lime'),
-        (COLOR_YELLOW, 'Yellow'),
-        (COLOR_AMBER, 'Amber'),
-        (COLOR_ORANGE, 'Orange'),
-        (COLOR_DARK_ORANGE, 'Dark orange'),
-        (COLOR_BROWN, 'Brown'),
-        (COLOR_LIGHT_GREY, 'Light grey'),
-        (COLOR_GREY, 'Grey'),
-        (COLOR_DARK_GREY, 'Dark grey'),
-        (COLOR_BLACK, 'Black'),
-        (COLOR_WHITE, 'White'),
-    )
-
-
-#
-# Button color choices
-#
-
-class ButtonColorChoices(ChoiceSet):
-    """
-    Map standard button color choices to Bootstrap color classes
-    """
-    DEFAULT = 'default'
-    BLUE = 'primary'
-    GREY = 'secondary'
-    GREEN = 'success'
-    RED = 'danger'
-    YELLOW = 'warning'
-    BLACK = 'dark'
-
-    CHOICES = (
-        (DEFAULT, 'Default'),
-        (BLUE, 'Blue'),
-        (GREY, 'Grey'),
-        (GREEN, 'Green'),
-        (RED, 'Red'),
-        (YELLOW, 'Yellow'),
-        (BLACK, 'Black')
-    )

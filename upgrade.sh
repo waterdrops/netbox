@@ -2,12 +2,38 @@
 # This script will prepare NetBox to run after the code has been upgraded to
 # its most recent release.
 
+# This script will invoke Python with the value of the PYTHON environment
+# variable (if set), or fall back to "python3". Note that NetBox v4.0+ requires
+# Python 3.10 or later.
+
 cd "$(dirname "$0")"
+
+NETBOX_VERSION="$(grep ^version netbox/release.yaml | cut -d \" -f2)"
+echo "You are installing (or upgrading to) NetBox version ${NETBOX_VERSION}"
+
 VIRTUALENV="$(pwd -P)/venv"
+PYTHON="${PYTHON:-python3}"
+
+# Validate the minimum required Python version
+COMMAND="${PYTHON} -c 'import sys; exit(1 if sys.version_info < (3, 10) else 0)'"
+PYTHON_VERSION=$(eval "${PYTHON} -V")
+eval $COMMAND || {
+  echo "--------------------------------------------------------------------"
+  echo "ERROR: Unsupported Python version: ${PYTHON_VERSION}. NetBox requires"
+  echo "Python 3.10 or later. To specify an alternate Python executable, set"
+  echo "the PYTHON environment variable. For example:"
+  echo ""
+  echo "  sudo PYTHON=/usr/bin/python3.10 ./upgrade.sh"
+  echo ""
+  echo "To show your current Python version: ${PYTHON} -V"
+  echo "--------------------------------------------------------------------"
+  exit 1
+}
+echo "Using ${PYTHON_VERSION}"
 
 # Remove the existing virtual environment (if any)
 if [ -d "$VIRTUALENV" ]; then
-  COMMAND="rm -rf ${VIRTUALENV}"
+  COMMAND="rm -rf \"${VIRTUALENV}\""
   echo "Removing old virtual environment..."
   eval $COMMAND
 else
@@ -15,7 +41,7 @@ else
 fi
 
 # Create a new virtual environment
-COMMAND="/usr/bin/python3 -m venv ${VIRTUALENV}"
+COMMAND="${PYTHON} -m venv \"${VIRTUALENV}\""
 echo "Creating a new virtual environment at ${VIRTUALENV}..."
 eval $COMMAND || {
   echo "--------------------------------------------------------------------"
@@ -66,6 +92,11 @@ COMMAND="python3 netbox/manage.py trace_paths --no-input"
 echo "Checking for missing cable paths ($COMMAND)..."
 eval $COMMAND || exit 1
 
+# Build the local documentation
+COMMAND="mkdocs build"
+echo "Building documentation ($COMMAND)..."
+eval $COMMAND || exit 1
+
 # Collect static files
 COMMAND="python3 netbox/manage.py collectstatic --no-input"
 echo "Collecting static files ($COMMAND)..."
@@ -76,14 +107,14 @@ COMMAND="python3 netbox/manage.py remove_stale_contenttypes --no-input"
 echo "Removing stale content types ($COMMAND)..."
 eval $COMMAND || exit 1
 
+# Rebuild the search cache (lazily)
+COMMAND="python3 netbox/manage.py reindex --lazy"
+echo "Rebuilding search cache ($COMMAND)..."
+eval $COMMAND || exit 1
+
 # Delete any expired user sessions
 COMMAND="python3 netbox/manage.py clearsessions"
 echo "Removing expired user sessions ($COMMAND)..."
-eval $COMMAND || exit 1
-
-# Clear all cached data
-COMMAND="python3 netbox/manage.py invalidate all"
-echo "Clearing cache data ($COMMAND)..."
 eval $COMMAND || exit 1
 
 if [ -v WARN_MISSING_VENV ]; then
